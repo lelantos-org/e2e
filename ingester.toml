@@ -1,0 +1,16 @@
+# Ingester config for the e2e stack. chain_id matches anvil's
+# `--chain-id=31337`. pool_address is overridden at runtime by
+# INGESTER_CHAIN_31337_POOL_ADDRESS (apply_env_overlay).
+
+database_url = "postgres://postgres:postgres@postgres:5432/postgres"
+
+[[chains]]
+chain_id = 31337
+rpc_url = "http://anvil:8545"
+pool_address = "0x0000000000000000000000000000000000000000"
+start_block = 0
+reorg_depth = 32
+block_poll_ms = 1000
+backfill_threshold = 50
+backfill_concurrency = 4
+chunk_blocks = 1000

@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1.7
+# Test runner image. Node + TypeScript + the SDK. Vitest as test driver.
+# Mounts circuits/build for transact_2x2 wasm + zkey at runtime.
+#
+# Build context MUST be the repo root.
+#
+#   docker build -f e2e/Dockerfile.runner -t lelantos/e2e-runner:dev .
+
+FROM node:20-bookworm-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Layer 1: SDK install + build (rarely changes).
+# Path layout mirrors the repo so the runner package.json's
+# `file:../../sdk` reference resolves correctly: runner is at /app/e2e/runner
+# and sdk is at /app/sdk → ../../sdk = /app/sdk ✓.
+COPY sdk/package.json sdk/package-lock.json sdk/tsconfig.json /app/sdk/
+RUN cd /app/sdk && npm ci
+COPY sdk/src /app/sdk/src
+RUN cd /app/sdk && npm run build
+
+# Layer 2: runner package install (depends on the local sdk path).
+COPY e2e/runner/package.json e2e/runner/tsconfig.json e2e/runner/vitest.config.ts /app/e2e/runner/
+RUN cd /app/e2e/runner && npm install
+
+# Layer 3: test sources.
+COPY e2e/runner/src /app/e2e/runner/src
+COPY e2e/runner/tests /app/e2e/runner/tests
+
+# Circuits artifacts: mounted at runtime. Default path inside the
+# container — compose mounts ../circuits/build to /app/circuits-build.
+ENV CIRCUITS_BUILD=/app/circuits-build
+
+WORKDIR /app/e2e/runner
+CMD ["npm", "test"]

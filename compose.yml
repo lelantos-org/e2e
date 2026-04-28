@@ -1,0 +1,185 @@
+# Full e2e stack. Profiles:
+#   (default) postgres + anvil + backend services
+#   deploy    one-shot contract deployer
+#   test      vitest runner
+#
+# `.env` (written by `just test` from deployer stdout) supplies addresses.
+
+x-backend: &backend
+  build:
+    context: ../backend
+    dockerfile: Dockerfile
+  image: lelantos/backend:dev
+  restart: unless-stopped
+  environment: &backend-env
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+    RUST_LOG: info,sqlx=warn
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - lelantos-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "5432:5432"
+    networks:
+      - lelantos-e2e
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:stable
+    entrypoint: ["anvil"]
+    command:
+      - --host=0.0.0.0
+      - --port=8545
+      - --chain-id=31337
+      - --hardfork=cancun
+      - --disable-code-size-limit
+      - --gas-limit=5000000000
+      - --block-time=1
+      - --mnemonic=test test test test test test test test test test test junk
+    healthcheck:
+      test: ["CMD-SHELL", "cast chain-id --rpc-url http://localhost:8545 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "8545:8545"
+    networks:
+      - lelantos-e2e
+
+  deployer:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.deployer
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    image: lelantos/deployer:dev
+    depends_on:
+      anvil:
+        condition: service_healthy
+    environment:
+      RPC_URL: http://anvil:8545
+      DEPLOYER_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    networks:
+      - lelantos-e2e
+    profiles:
+      - deploy
+
+  ingester:
+    <<: *backend
+    command: ["ingester"]
+    environment:
+      <<: *backend-env
+      INGESTER_CONFIG: /etc/ingester.toml
+      INGESTER_CHAIN_31337_POOL_ADDRESS: "${MASP}"
+      INGESTER_CHAIN_31337_RPC_URL: "http://anvil:8545"
+      INGESTER_CHAIN_31337_START_BLOCK: "0"
+    volumes:
+      - ./ingester.toml:/etc/ingester.toml:ro
+
+  fmd-indexer:
+    <<: *backend
+    command: ["fmd-indexer"]
+
+  explorer-indexer:
+    <<: *backend
+    command: ["explorer-indexer"]
+    environment:
+      <<: *backend-env
+      EXPLORER_INDEXER_CONFIG: /etc/explorer-indexer.toml
+    volumes:
+      - ../backend/deploy/explorer-indexer.toml:/etc/explorer-indexer.toml:ro
+
+  fmd-webserver:
+    <<: *backend
+    command: ["fmd-webserver"]
+    environment:
+      <<: *backend-env
+      BIND_ADDR: 0.0.0.0:3001
+    ports:
+      - "3001:3001"
+
+  explorer-webserver:
+    <<: *backend
+    command: ["explorer-webserver"]
+    environment:
+      <<: *backend-env
+      EXPLORER_BIND_ADDR: 0.0.0.0:3002
+    ports:
+      - "3002:3002"
+
+  relayer:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.relayer
+    image: lelantos/relayer:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+      RELAYER_CONFIG: /etc/relayer.toml
+      # Anvil deterministic account[1] — relayer signer.
+      RELAYER_CHAIN_31337_POOL_ADDRESS: "${MASP}"
+      RELAYER_CHAIN_31337_RPC_URL: "http://anvil:8545"
+      RELAYER_CHAIN_31337_SIGNER_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+      RUST_LOG: info
+    ports:
+      - "3003:3003"
+    volumes:
+      - ./relayer.toml:/etc/relayer.toml:ro
+    networks:
+      - lelantos-e2e
+
+  runner:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.runner
+    image: lelantos/e2e-runner:dev
+    depends_on:
+      - relayer
+      - fmd-webserver
+      - explorer-webserver
+    environment:
+      RELAYER_URL: "http://relayer:3003"
+      FMD_URL: "http://fmd-webserver:3001"
+      EXPLORER_URL: "http://explorer-webserver:3002"
+      RPC_URL: "http://anvil:8545"
+      MASP_ADDRESS: "${MASP}"
+      TOKEN_1: "${TOKEN_1}"
+      TOKEN_2: "${TOKEN_2}"
+      TOKEN_3: "${TOKEN_3}"
+      CHAIN_ID: "31337"
+      # Anvil deterministic accounts:
+      #   [0] deployer       0xf39…
+      #   [1] relayer signer 0x709…
+      #   [2] payer          0x3C4…
+      #   [3] recipient      0x90F…
+      PAYER_ADDRESS: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+      PAYER_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+      RECIPIENT_ADDRESS: "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+    volumes:
+      - ../circuits/build:/app/circuits-build:ro
+    networks:
+      - lelantos-e2e
+    profiles:
+      - test
+
+networks:
+  lelantos-e2e:
+    driver: bridge
+    name: lelantos-e2e
