@@ -1,38 +1,38 @@
 // Minimal HTTP client for the relayer. Mirrors the wire format the
-// relayer's dto/transact.rs expects.
+// relayer's dto/transact.rs expects (camelCase).
 
 export interface SubmitTransactPayload {
-    chain_id: number;
-    proof2x2: { pi_a: string[]; pi_b: string[][]; pi_c: string[] };
-    pub_inputs: PubInputsDto;
+    chainId: number;
+    proof2x2: { piA: string[]; piB: string[][]; piC: string[] };
+    pubInputs: PubInputsDto;
     aux: [OutputAuxDto, OutputAuxDto];
 }
 
 export interface PubInputsDto {
-    merkle_root: string;
+    merkleRoot: string;
     nullifier: [string, string];
-    out_cm: [string, string];
-    public_asset_id: number;
-    pub_asset_gen: { x: string; y: string };
-    public_in: number;
-    public_out: number;
-    in_cv: [{ x: string; y: string }, { x: string; y: string }];
-    out_cv: [{ x: string; y: string }, { x: string; y: string }];
+    outCm: [string, string];
+    publicAssetId: number;
+    pubAssetGen: { x: string; y: string };
+    publicIn: number;
+    publicOut: number;
+    inCv: [{ x: string; y: string }, { x: string; y: string }];
+    outCv: [{ x: string; y: string }, { x: string; y: string }];
     recipient: string;
-    chain_id: number;
+    chainId: number;
     payer: string;
     relayer: string;
 }
 
 export interface OutputAuxDto {
-    clue_r: { x: string; y: string };
-    eph_pub: { x: string; y: string };
+    clueR: { x: string; y: string };
+    ephPub: { x: string; y: string };
     /// 0x-hex of the 2-byte clueBits prefix || ChaCha20-Poly1305 body.
     ciphertext: string;
 }
 
 export interface RelayerSubmitResponse {
-    tx_hash: string;
+    txHash: string;
 }
 
 export class RelayerClient {

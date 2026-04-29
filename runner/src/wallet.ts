@@ -106,8 +106,8 @@ export function buildOutputAux(args: {
     ciphertext.set(enc.ciphertext, prefix.length);
 
     return {
-        clue_r: { x: clueRPoint[0].toString(), y: clueRPoint[1].toString() },
-        eph_pub: { x: ephPub[0].toString(), y: ephPub[1].toString() },
+        clueR: { x: clueRPoint[0].toString(), y: clueRPoint[1].toString() },
+        ephPub: { x: ephPub[0].toString(), y: ephPub[1].toString() },
         ciphertext: "0x" + bytesToHex(ciphertext),
     };
 }
@@ -157,15 +157,15 @@ export function makeCounterScalar(seed: bigint): () => Field {
 }
 
 export interface MatchOut {
-    note_id: number;
-    chain_id: number;
-    block_number: number;
-    leaf_index: number;
-    commitment_hex: string;
-    clue_bits_hex: string;
-    ciphertext_hex: string;
-    eph_pub_x: string;
-    eph_pub_y: string;
+    noteId: number;
+    chainId: number;
+    blockNumber: number;
+    leafIndex: number;
+    commitmentHex: string;
+    clueBitsHex: string;
+    ciphertextHex: string;
+    ephPubX: string;
+    ephPubY: string;
 }
 
 export async function fetchMatches(subscriptionId: number): Promise<MatchOut[]> {
@@ -180,7 +180,7 @@ export async function createSubscription(detectionKeyHex: string, gamma: number)
     const r = await fetch(`${env.fmdUrl}/v1/subscriptions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ detection_key_hex: detectionKeyHex, gamma }),
+        body: JSON.stringify({ detectionKeyHex, gamma }),
     });
     if (!r.ok) throw new Error(`POST /v1/subscriptions: ${r.status} ${await r.text()}`);
     const body = (await r.json()) as { id: number };
@@ -194,11 +194,11 @@ export function tryDecryptMatch(
     ivk: Field,
     m: MatchOut,
 ): { asset: bigint; value: bigint; rho: bigint; rcm: bigint } | null {
-    const ct = hexToBytes(m.ciphertext_hex);
+    const ct = hexToBytes(m.ciphertextHex);
     if (ct.length < 2) return null;
     const body = ct.slice(2); // strip the 2-byte clueBits prefix
 
-    const ephPubPoint: Point = [BigInt(m.eph_pub_x), BigInt(m.eph_pub_y)];
+    const ephPubPoint: Point = [BigInt(m.ephPubX), BigInt(m.ephPubY)];
     const epkPacked = J.packPoint(ephPubPoint);
 
     const plain = decryptNote({ J, ivk, note: { epk: epkPacked, ciphertext: body } });

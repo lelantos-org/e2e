@@ -49,8 +49,8 @@ function cmHex(cm: Field): string {
 }
 
 export const emptyAux: OutputAuxDto = {
-    clue_r: { x: "0", y: "0" },
-    eph_pub: { x: "0", y: "0" },
+    clueR: { x: "0", y: "0" },
+    ephPub: { x: "0", y: "0" },
     ciphertext: "0x0000",
 };
 
@@ -103,41 +103,41 @@ async function buildPayload(opts: ProveOpts): Promise<SubmitTransactPayload> {
     }
 
     const pubInputs: PubInputsDto = {
-        merkle_root: toDec((baseInput as any).merkle_root),
+        merkleRoot: toDec((baseInput as any).merkle_root),
         nullifier: [
             toDec((baseInput as any).nullifier[0]),
             toDec((baseInput as any).nullifier[1]),
         ],
-        out_cm: [
+        outCm: [
             toDec((baseInput as any).out_cm[0]),
             toDec((baseInput as any).out_cm[1]),
         ],
-        public_asset_id: Number(ASSET),
-        pub_asset_gen: { x: toDec(pubGen[0]), y: toDec(pubGen[1]) },
-        public_in: Number(publicIn),
-        public_out: Number(publicOut),
-        in_cv: [
+        publicAssetId: Number(ASSET),
+        pubAssetGen: { x: toDec(pubGen[0]), y: toDec(pubGen[1]) },
+        publicIn: Number(publicIn),
+        publicOut: Number(publicOut),
+        inCv: [
             { x: toDec((baseInput as any).in_cv[0][0]), y: toDec((baseInput as any).in_cv[0][1]) },
             { x: toDec((baseInput as any).in_cv[1][0]), y: toDec((baseInput as any).in_cv[1][1]) },
         ],
-        out_cv: [
+        outCv: [
             { x: toDec((baseInput as any).out_cv[0][0]), y: toDec((baseInput as any).out_cv[0][1]) },
             { x: toDec((baseInput as any).out_cv[1][0]), y: toDec((baseInput as any).out_cv[1][1]) },
         ],
         recipient: opts.recipientAddress,
-        chain_id: Number(env.chainId),
+        chainId: Number(env.chainId),
         payer: opts.payerAddress,
         relayer: opts.relayerAddress,
     };
 
     return {
-        chain_id: Number(env.chainId),
+        chainId: Number(env.chainId),
         proof2x2: {
-            pi_a: proof.pi_a,
-            pi_b: proof.pi_b,
-            pi_c: proof.pi_c,
+            piA: proof.pi_a,
+            piB: proof.pi_b,
+            piC: proof.pi_c,
         },
-        pub_inputs: pubInputs,
+        pubInputs,
         aux: opts.aux ?? [emptyAux, emptyAux],
     };
 }

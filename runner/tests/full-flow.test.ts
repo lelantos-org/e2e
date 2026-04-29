@@ -101,23 +101,23 @@ describe("masp e2e flow", () => {
 
     async function pollNoteByCm(cmHex: string) {
         return pollUntil(async () => {
-            const r = await fetch(`${env.fmdUrl}/v1/notes?chain_id=${env.chainId}&limit=20`);
+            const r = await fetch(`${env.fmdUrl}/v1/notes?chainId=${env.chainId}&limit=20`);
             if (!r.ok) return null;
-            const rows = (await r.json()) as Array<{ commitment_hex: string; leaf_index: number }>;
-            return rows.find(n => "0x" + n.commitment_hex.toLowerCase() === cmHex.toLowerCase());
+            const rows = (await r.json()) as Array<{ commitmentHex: string; leafIndex: number }>;
+            return rows.find(n => "0x" + n.commitmentHex.toLowerCase() === cmHex.toLowerCase());
         }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 60_000 });
     }
 
     async function pollAdvance(startIndex: number) {
         return pollUntil(async () => {
-            const r = await fetch(`${env.explorerUrl}/v1/tree-advances?chain_id=${env.chainId}&limit=20`);
+            const r = await fetch(`${env.explorerUrl}/v1/tree-advances?chainId=${env.chainId}&limit=20`);
             if (!r.ok) return null;
             const rows = (await r.json()) as Array<{
-                start_index: number;
+                startIndex: number;
                 inserted: number;
-                new_root_hex: string;
+                newRootHex: string;
             }>;
-            return rows.find(t => t.start_index === startIndex);
+            return rows.find(t => t.startIndex === startIndex);
         }, { label: `tree_advance(${startIndex})`, timeoutMs: 60_000 });
     }
 
@@ -142,7 +142,7 @@ describe("masp e2e flow", () => {
             recipientAddress: env.recipientAddress,
         });
         const submit = await relayer.submitTransact(result.payload);
-        expect(submit.tx_hash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+        expect(submit.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
 
         // ERC20 movement: payer ↓ 100, MASP ↑ 100. publicOut=0 → recipient
         // gets nothing on chain.
@@ -154,8 +154,8 @@ describe("masp e2e flow", () => {
         // Two cms land at leaves 0, 1.
         const note0 = await pollNoteByCm(result.cm0Hex);
         const note1 = await pollNoteByCm(result.cm1Hex);
-        expect(note0.leaf_index).toBe(0);
-        expect(note1.leaf_index).toBe(1);
+        expect(note0.leafIndex).toBe(0);
+        expect(note1.leafIndex).toBe(1);
 
         const adv = await pollAdvance(0);
         expect(adv.inserted).toBe(2);
@@ -169,15 +169,15 @@ describe("masp e2e flow", () => {
         aliceWallet.push({
             note: result.producedNotes[0],
             nsk: ALICE_NSK,
-            leafIndex: note0.leaf_index,
+            leafIndex: note0.leafIndex,
         });
 
         // Path round-trip
-        const pathRes = await fetch(`${env.fmdUrl}/v1/path/${result.cm0Hex}?chain_id=${env.chainId}`);
+        const pathRes = await fetch(`${env.fmdUrl}/v1/path/${result.cm0Hex}?chainId=${env.chainId}`);
         expect(pathRes.ok).toBe(true);
-        const path = (await pathRes.json()) as { root_hex: string };
+        const path = (await pathRes.json()) as { rootHex: string };
         const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
-        expect(await masp.isKnownRoot(path.root_hex)).toBe(true);
+        expect(await masp.isKnownRoot(path.rootHex)).toBe(true);
         expect(await masp.committedCount()).toBe(2n);
     });
 
@@ -221,7 +221,7 @@ describe("masp e2e flow", () => {
         });
 
         const submit = await relayer.submitTransact(result.payload);
-        expect(submit.tx_hash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+        expect(submit.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
 
         // Shielded transfer: zero ERC20 movement on every party.
         const payerAfter = (await token.balanceOf(env.payerAddress)) as bigint;
@@ -233,8 +233,8 @@ describe("masp e2e flow", () => {
 
         const note0 = await pollNoteByCm(result.cm0Hex);
         const note1 = await pollNoteByCm(result.cm1Hex);
-        expect(note0.leaf_index).toBe(2);
-        expect(note1.leaf_index).toBe(3);
+        expect(note0.leafIndex).toBe(2);
+        expect(note1.leafIndex).toBe(3);
 
         const adv = await pollAdvance(2);
         expect(adv.inserted).toBe(2);
@@ -243,7 +243,7 @@ describe("masp e2e flow", () => {
         const { buildNoteCommitment, buildNullifier } = await import("@lelantos/sdk");
         tree.insert(buildNoteCommitment(P, bobOut));
         tree.insert(buildNoteCommitment(P, aliceChange));
-        aliceWallet = [{ note: aliceChange, nsk: ALICE_NSK, leafIndex: note1.leaf_index }];
+        aliceWallet = [{ note: aliceChange, nsk: ALICE_NSK, leafIndex: note1.leafIndex }];
 
         // Confirm alice's spent nullifier registered.
         const spentNf = buildNullifier(P, ALICE_NSK, aliceCached.note.rho);
@@ -278,7 +278,7 @@ describe("masp e2e flow", () => {
         });
 
         const submit = await relayer.submitTransact(result.payload);
-        expect(submit.tx_hash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+        expect(submit.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
 
         const adv = await pollAdvance(4);
         expect(adv.inserted).toBe(2);
@@ -308,7 +308,7 @@ describe("masp e2e flow", () => {
 
         expect(matches.length).toBe(1);
         const m = matches[0];
-        expect(m.leaf_index).toBe(2); // bob's slot in the transfer (cm0)
+        expect(m.leafIndex).toBe(2); // bob's slot in the transfer (cm0)
 
         // Decrypt with bob's ivk; reconstruct plaintext.
         const sync = syncBalance(J, bob.keys.ivk, matches, 1n);
