@@ -77,8 +77,8 @@ services:
   ingester:
     <<: *backend
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: ../backend
+      dockerfile: Dockerfile
       args:
         PACKAGE: ingester
     image: lelantos/ingester:dev
@@ -94,8 +94,8 @@ services:
   fmd-indexer:
     <<: *backend
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: ../backend
+      dockerfile: Dockerfile
       args:
         PACKAGE: fmd-indexer
     image: lelantos/fmd-indexer:dev
@@ -103,8 +103,8 @@ services:
   explorer-indexer:
     <<: *backend
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: ../backend
+      dockerfile: Dockerfile
       args:
         PACKAGE: explorer-indexer
     image: lelantos/explorer-indexer:dev
@@ -117,8 +117,8 @@ services:
   fmd-webserver:
     <<: *backend
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: ../backend
+      dockerfile: Dockerfile
       args:
         PACKAGE: fmd-webserver
     image: lelantos/fmd-webserver:dev
@@ -131,8 +131,8 @@ services:
   explorer-webserver:
     <<: *backend
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: ../backend
+      dockerfile: Dockerfile
       args:
         PACKAGE: explorer-webserver
     image: lelantos/explorer-webserver:dev
