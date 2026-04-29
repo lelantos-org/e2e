@@ -6,10 +6,6 @@
 # `.env` (written by `just test` from deployer stdout) supplies addresses.
 
 x-backend: &backend
-  build:
-    context: ../backend
-    dockerfile: Dockerfile
-  image: lelantos/backend:dev
   restart: unless-stopped
   environment: &backend-env
     DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
@@ -80,7 +76,12 @@ services:
 
   ingester:
     <<: *backend
-    command: ["ingester"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PACKAGE: ingester
+    image: lelantos/ingester:dev
     environment:
       <<: *backend-env
       INGESTER_CONFIG: /etc/ingester.toml
@@ -92,11 +93,21 @@ services:
 
   fmd-indexer:
     <<: *backend
-    command: ["fmd-indexer"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PACKAGE: fmd-indexer
+    image: lelantos/fmd-indexer:dev
 
   explorer-indexer:
     <<: *backend
-    command: ["explorer-indexer"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PACKAGE: explorer-indexer
+    image: lelantos/explorer-indexer:dev
     environment:
       <<: *backend-env
       EXPLORER_INDEXER_CONFIG: /etc/explorer-indexer.toml
@@ -105,7 +116,12 @@ services:
 
   fmd-webserver:
     <<: *backend
-    command: ["fmd-webserver"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PACKAGE: fmd-webserver
+    image: lelantos/fmd-webserver:dev
     environment:
       <<: *backend-env
       BIND_ADDR: 0.0.0.0:3001
@@ -114,7 +130,12 @@ services:
 
   explorer-webserver:
     <<: *backend
-    command: ["explorer-webserver"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        PACKAGE: explorer-webserver
+    image: lelantos/explorer-webserver:dev
     environment:
       <<: *backend-env
       EXPLORER_BIND_ADDR: 0.0.0.0:3002
@@ -124,7 +145,7 @@ services:
   relayer:
     build:
       context: ..
-      dockerfile: e2e/Dockerfile.relayer
+      dockerfile: backend/crates/relayer/Dockerfile
     image: lelantos/relayer:dev
     restart: unless-stopped
     depends_on:

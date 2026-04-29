@@ -43,7 +43,7 @@ just logs <svc>    # Tail one service.
 | Path | Purpose |
 |---|---|
 | `compose.yml` | Full stack; profiles `deploy` (one-shot deployer) + `test` (runner). |
-| `Dockerfile.relayer` | Rust relayer + tree_update circuit artifacts baked in. |
+| `../backend/crates/relayer/Dockerfile` | Rust relayer + tree_update circuit artifacts baked in. |
 | `Dockerfile.deployer` | Foundry + cast; runs `forge script Deploy.s.sol`. |
 | `Dockerfile.runner` | Node + TS + the SDK + ethers; vitest. |
 | `relayer.toml` | Relayer config with placeholders; runtime env overrides them. |
