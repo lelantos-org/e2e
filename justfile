@@ -21,6 +21,10 @@ up: deploy
     @echo "==> backend services"
     {{DC}} up -d --wait ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer
 
+up-build: deploy
+    @echo "==> backend services"
+    {{DC}} up -d --no-deps --build --wait ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer
+
 down:
     -{{DC}} --profile test --profile deploy down -v --remove-orphans
     rm -f "{{ENV_FILE}}"
