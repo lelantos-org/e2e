@@ -22,7 +22,7 @@ import {
     type FmdDetectionKey,
     type FmdFlagKey,
     type Note,
-} from "@lelantos/sdk";
+} from "@lelantos-org/sdk";
 
 import { env } from "./env";
 import type { OutputAuxDto } from "./relayer-client";

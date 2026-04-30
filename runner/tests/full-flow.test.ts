@@ -12,7 +12,7 @@ import {
     MerkleTree,
     type Field,
     type Note,
-} from "@lelantos/sdk";
+} from "@lelantos-org/sdk";
 
 import { env } from "../src/env";
 import { pollUntil } from "../src/poll";
@@ -161,7 +161,7 @@ describe("masp e2e flow", () => {
         expect(adv.inserted).toBe(2);
 
         // Update local tree mirror in the same order the contract does.
-        const { buildNoteCommitment } = await import("@lelantos/sdk");
+        const { buildNoteCommitment } = await import("@lelantos-org/sdk");
         tree.insert(buildNoteCommitment(P, result.producedNotes[0]));
         tree.insert(buildNoteCommitment(P, result.producedNotes[1]));
 
@@ -240,7 +240,7 @@ describe("masp e2e flow", () => {
         expect(adv.inserted).toBe(2);
 
         // Update mirror; track alice's change note as her new spendable.
-        const { buildNoteCommitment, buildNullifier } = await import("@lelantos/sdk");
+        const { buildNoteCommitment, buildNullifier } = await import("@lelantos-org/sdk");
         tree.insert(buildNoteCommitment(P, bobOut));
         tree.insert(buildNoteCommitment(P, aliceChange));
         aliceWallet = [{ note: aliceChange, nsk: ALICE_NSK, leafIndex: note1.leafIndex }];

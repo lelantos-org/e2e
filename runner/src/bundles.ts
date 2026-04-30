@@ -24,7 +24,7 @@ import {
     type Field,
     type Note,
     type SpentNote,
-} from "@lelantos/sdk";
+} from "@lelantos-org/sdk";
 
 import { env } from "./env";
 import type { OutputAuxDto, PubInputsDto, SubmitTransactPayload } from "./relayer-client";
