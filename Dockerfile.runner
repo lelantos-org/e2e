@@ -22,6 +22,10 @@ WORKDIR /app
 COPY sdk/package.json sdk/package-lock.json sdk/tsconfig.json /app/sdk/
 RUN cd /app/sdk && npm ci
 COPY sdk/src /app/sdk/src
+# Subpath imports `#wasm/jubjub` + `#wasm/prover` (see sdk/package.json
+# `imports`) resolve into sdk/wasm/*/pkg — wasm-pack output. tsc needs the
+# .d.ts files to type-check.
+COPY sdk/wasm /app/sdk/wasm
 RUN cd /app/sdk && npm run build
 
 # Layer 2: runner package install (depends on the local sdk path).

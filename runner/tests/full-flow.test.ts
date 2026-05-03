@@ -21,7 +21,7 @@ import {
     buildDeposit,
     buildTransfer,
     buildWithdraw,
-    emptyAux,
+    makePadAux,
     ALICE_NSK,
     BOB_NSK,
     type SpendableCachedNote,
@@ -202,6 +202,7 @@ describe("masp e2e flow", () => {
         const esk = makeCounterScalar(0xe0a5e0a5e0a5n)();
         const bobAux = buildOutputAux({
             J,
+            P,
             recipientFlagKey: bob.flagKey,
             recipientPkD: bob.keys.pk_d,
             fmdR,
@@ -217,7 +218,7 @@ describe("masp e2e flow", () => {
             outputs: [bobOut, aliceChange],
             payerAddress: env.payerAddress,
             recipientAddress: env.recipientAddress,
-            aux: [bobAux, emptyAux],
+            auxWitnessed: [bobAux, makePadAux(P, J, aliceChange, 0xdd)],
         });
 
         const submit = await relayer.submitTransact(result.payload);

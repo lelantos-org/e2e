@@ -21,13 +21,18 @@ import {
     MerkleTree,
     buildNoteCommitment,
     buildNullifier,
+    fmdGenDetectionKey,
+    fmdFlagKeyFromDetection,
     type Field,
     type Note,
     type SpentNote,
 } from "@lelantos-org/sdk";
 
+import { buildOutputAux, type OutputAuxWithWitness } from "./wallet";
 import { env } from "./env";
 import type { OutputAuxDto, PubInputsDto, SubmitTransactPayload } from "./relayer-client";
+
+const FMD_GAMMA = 5;
 
 const DEPTH = 10;
 const ASSET = 1n;
@@ -48,11 +53,28 @@ function cmHex(cm: Field): string {
     return "0x" + BigInt(cm).toString(16).padStart(64, "0");
 }
 
-export const emptyAux: OutputAuxDto = {
-    clueR: { x: "0", y: "0" },
-    ephPub: { x: "0", y: "0" },
-    ciphertext: "0x0000",
-};
+/// Build a real but throw-away clue for pad/dummy outputs.
+/// Uses a fresh random detection key so the clue lands on no real
+/// subscription (FP rate 2^-γ). Required since the SNARK ClueCheck
+/// constrains every output slot.
+export function makePadAux(P: Poseidon, J: Jubjub, note: Note, seed: number): OutputAuxWithWitness {
+    let s = BigInt(seed) | 1n;
+    const stream = (): bigint => {
+        s = (s * 6364136223846793005n + 1442695040888963407n) & ((1n << 128n) - 1n);
+        return s | 1n;
+    };
+    const dk = fmdGenDetectionKey(stream, FMD_GAMMA);
+    const fk = fmdFlagKeyFromDetection(J, dk);
+    return buildOutputAux({
+        J,
+        P,
+        recipientFlagKey: fk,
+        recipientPkD: J.base8,
+        fmdR: stream(),
+        esk: stream(),
+        note,
+    });
+}
 
 interface ProveOpts {
     P: Poseidon;
@@ -65,15 +87,17 @@ interface ProveOpts {
     payerAddress: string;
     relayerAddress: string;
     recipientAddress: string;
-    /// Optional per-slot aux. Defaults to `emptyAux` (zero clue + 2-byte
-    /// ciphertext "0x0000"). Real wallets populate FMD clue + encrypted
-    /// note payload — see e2e/runner/src/wallet.ts::buildOutputAux.
-    aux?: [OutputAuxDto, OutputAuxDto];
+    /// Per-slot aux + clue witness. SNARK ClueCheck constrains every
+    /// output slot, so both must carry a real (r, fk) pair — pads use
+    /// `makePadAux()` for a throw-away clue.
+    auxWitnessed: [OutputAuxWithWitness, OutputAuxWithWitness];
 }
 
 async function buildPayload(opts: ProveOpts): Promise<SubmitTransactPayload> {
-    const { P, J, inputs, outputs, merkleRoot, publicIn, publicOut } = opts;
+    const { P, J, inputs, outputs, merkleRoot, publicIn, publicOut, auxWitnessed } = opts;
     const pubGen = J.hashToAssetGen(ASSET);
+    const aux: [OutputAuxDto, OutputAuxDto] = [auxWitnessed[0].aux, auxWitnessed[1].aux];
+    const outputClues = auxWitnessed.map((a) => a.witness);
 
     const baseInput = toCircomInput(P, J, {
         publicAssetId: ASSET,
@@ -82,6 +106,7 @@ async function buildPayload(opts: ProveOpts): Promise<SubmitTransactPayload> {
         publicOut,
         inputs,
         outputs,
+        outputClues,
         merkleRoot,
         recipientAddress: addrToDec(opts.recipientAddress),
         chainId: env.chainId,
@@ -90,7 +115,13 @@ async function buildPayload(opts: ProveOpts): Promise<SubmitTransactPayload> {
         z: 0n,
     });
 
-    const coeffs = flatten(baseInput as any);
+    const flattenInput = {
+        ...(baseInput as any),
+        out_clue_Rx: aux.map((a) => BigInt(a.clueR.x)),
+        out_clue_Ry: aux.map((a) => BigInt(a.clueR.y)),
+        out_clue_bits: outputClues.map((c) => c.clueBits),
+    };
+    const coeffs = flatten(flattenInput);
     const z = fiatShamirZ(coeffs);
     const input = { ...baseInput, z: z.toString() };
 
@@ -138,7 +169,7 @@ async function buildPayload(opts: ProveOpts): Promise<SubmitTransactPayload> {
             piC: proof.pi_c,
         },
         pubInputs,
-        aux: opts.aux ?? [emptyAux, emptyAux],
+        aux,
     };
 }
 
@@ -173,6 +204,8 @@ export async function buildDeposit(P: Poseidon, J: Jubjub, params: {
     const padOut:  Note = { asset: ASSET, value: 0n,            pk: aliceP, rho: 12n, rcm: 13n, rcv: 14n };
 
     const root = new MerkleTree(P, DEPTH).root();
+    const aux0 = makePadAux(P, J, realOut, 0xa0);
+    const aux1 = makePadAux(P, J, padOut, 0xa1);
     const payload = await buildPayload({
         P, J,
         inputs: [dA, dB],
@@ -183,6 +216,7 @@ export async function buildDeposit(P: Poseidon, J: Jubjub, params: {
         payerAddress: params.payerAddress,
         relayerAddress: RELAYER_ADDR,
         recipientAddress: params.recipientAddress,
+        auxWitnessed: [aux0, aux1],
     });
 
     const cm0 = buildNoteCommitment(P, realOut);
@@ -212,7 +246,7 @@ export async function buildTransfer(P: Poseidon, J: Jubjub, params: {
     outputs: [Note, Note];
     payerAddress: string;
     recipientAddress: string;
-    aux?: [OutputAuxDto, OutputAuxDto];
+    auxWitnessed?: [OutputAuxWithWitness, OutputAuxWithWitness];
 }): Promise<BundleResult> {
     const sumIn = params.cached.note.value;
     const sumOut = params.outputs[0].value + params.outputs[1].value;
@@ -223,6 +257,10 @@ export async function buildTransfer(P: Poseidon, J: Jubjub, params: {
     const realIn = toSpentNote(P, params.cached, params.tree);
     const dummy = dummyInputAt(P, DEPTH, 200n);
 
+    const auxW: [OutputAuxWithWitness, OutputAuxWithWitness] = params.auxWitnessed ?? [
+        makePadAux(P, J, params.outputs[0], 0xb0),
+        makePadAux(P, J, params.outputs[1], 0xb1),
+    ];
     const payload = await buildPayload({
         P, J,
         inputs: [realIn, dummy],
@@ -233,7 +271,7 @@ export async function buildTransfer(P: Poseidon, J: Jubjub, params: {
         payerAddress: params.payerAddress,
         relayerAddress: RELAYER_ADDR,
         recipientAddress: params.recipientAddress,
-        aux: params.aux,
+        auxWitnessed: auxW,
     });
 
     const cm0 = buildNoteCommitment(P, params.outputs[0]);
@@ -269,6 +307,10 @@ export async function buildWithdraw(P: Poseidon, J: Jubjub, params: {
     const realIn = toSpentNote(P, params.cached, params.tree);
     const dummy = dummyInputAt(P, DEPTH, 300n);
 
+    const auxW: [OutputAuxWithWitness, OutputAuxWithWitness] = [
+        makePadAux(P, J, params.change[0], 0xc0),
+        makePadAux(P, J, params.change[1], 0xc1),
+    ];
     const payload = await buildPayload({
         P, J,
         inputs: [realIn, dummy],
@@ -279,6 +321,7 @@ export async function buildWithdraw(P: Poseidon, J: Jubjub, params: {
         payerAddress: params.payerAddress,
         relayerAddress: RELAYER_ADDR,
         recipientAddress: params.recipientAddress,
+        auxWitnessed: auxW,
     });
 
     const cm0 = buildNoteCommitment(P, params.change[0]);

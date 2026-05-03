@@ -21,9 +21,11 @@ up: deploy
     @echo "==> backend services"
     {{DC}} up -d --wait ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer
 
-up-build: deploy
+up-build: deploy-build
     @echo "==> backend services"
     {{DC}} up -d --no-deps --build --wait ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer
+    @echo "==> rebuilding runner image"
+    {{DC}} --profile test build runner
 
 down:
     -{{DC}} --profile test --profile deploy down -v --remove-orphans
@@ -45,3 +47,13 @@ deploy:
         > "{{ENV_FILE}}"
     @echo "==> .env:"
     @cat "{{ENV_FILE}}"
+
+# Same as `deploy` but rebuilds the deployer image first. Required whenever
+# contracts/ (incl. circuits/build/Verifier.sol) changed, since the deployer
+# Dockerfile COPYs contracts/ at image-build time — a stale image would
+# redeploy an old verifier and the spend proof would revert with
+# ProofRejected() (0xc3b0d8cd).
+deploy-build:
+    @echo "==> rebuilding deployer image"
+    {{DC}} --profile deploy build deployer
+    @just deploy

@@ -69,17 +69,24 @@ function bigintToLeBytes(v: bigint, len: number): Uint8Array {
 ///   - FMD clue R + bits prefix
 ///   - ECDH ephemeral pub epk
 ///   - ChaCha20-Poly1305 ciphertext of the plaintext (asset|value|rho|rcm).
+export interface OutputAuxWithWitness {
+    aux: OutputAuxDto;
+    /// FMD clue witness for the SNARK ClueCheck template.
+    witness: { r: Field; fk: Point[]; clueBits: Field };
+}
+
 export function buildOutputAux(args: {
     J: Jubjub;
+    P: Poseidon;
     recipientFlagKey: FmdFlagKey;
     recipientPkD: Point;
     fmdR: Field;
     esk: Field;
     note: Note;
-}): OutputAuxDto {
-    const { J, recipientFlagKey, recipientPkD, fmdR, esk, note } = args;
+}): OutputAuxWithWitness {
+    const { J, P, recipientFlagKey, recipientPkD, fmdR, esk, note } = args;
 
-    const clue = fmdFlag(J, recipientFlagKey, fmdR);
+    const clue = fmdFlag(J, P, recipientFlagKey, fmdR);
     const clueRPoint = J.unpackPoint(clue.R);
     if (!clueRPoint) throw new Error("clue R unpack failed");
 
@@ -105,10 +112,23 @@ export function buildOutputAux(args: {
     ciphertext.set(prefix, 0);
     ciphertext.set(enc.ciphertext, prefix.length);
 
+    let clueBitsField: bigint = 0n;
+    for (let i = 0; i < clue.gamma; i++) {
+        const b = (clue.bits[i >> 3] >> (i & 7)) & 1;
+        if (b) clueBitsField |= 1n << BigInt(i);
+    }
+
     return {
-        clueR: { x: clueRPoint[0].toString(), y: clueRPoint[1].toString() },
-        ephPub: { x: ephPub[0].toString(), y: ephPub[1].toString() },
-        ciphertext: "0x" + bytesToHex(ciphertext),
+        aux: {
+            clueR: { x: clueRPoint[0].toString(), y: clueRPoint[1].toString() },
+            ephPub: { x: ephPub[0].toString(), y: ephPub[1].toString() },
+            ciphertext: "0x" + bytesToHex(ciphertext),
+        },
+        witness: {
+            r: fmdR,
+            fk: recipientFlagKey.X,
+            clueBits: clueBitsField,
+        },
     };
 }
 
