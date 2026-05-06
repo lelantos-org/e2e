@@ -1,74 +1,104 @@
-# e2e — Lazy-Root v2 Full-Stack Test
+# e2e — host-driven full-stack tests
 
-Boots the entire Lelantos stack (Postgres, anvil, contracts, all six
-backend binaries, a TypeScript test runner) under docker compose and
-exercises the deposit happy path end-to-end.
+Boots the full Lelantos stack (postgres + anvil + the six backend
+services) via [testcontainers-node][tc] and exercises deposit → shielded
+transfer → withdraw → fmd-driven sync end-to-end. Container lifecycle is
+owned by the test process, not docker compose; failures surface
+host-side stack traces and `console.log` works without rebuilding any
+image.
 
-## What it does
+[tc]: https://node.testcontainers.org/
 
-1. Brings up Postgres + anvil (Cancun, chain-id 31337, deterministic mnemonic).
-2. Runs a one-shot `deployer` that executes
-   [contracts/script/Deploy.s.sol](../contracts/script/Deploy.s.sol) and
-   prints the MASP / verifier / token addresses to stdout.
-3. Captures those addresses into `.env`.
-4. Boots ingester, fmd-indexer, explorer-indexer, fmd-webserver,
-   explorer-webserver, relayer with the addresses fed via env vars (each
-   binary's `apply_env_overlay` reads them).
-5. Runs the runner container which uses the SDK to:
-   - Build a real `transact_2x2` deposit proof.
-   - POST it to the relayer's `/v1/transact`.
-   - Wait for `fmd-indexer` to populate `notes` (`leaf_index ∈ {0, 1}`).
-   - Wait for `explorer-indexer` to populate `tree_advances`.
-   - Fetch `/v1/path/<cm>` from `fmd-webserver` and verify the recomputed
-     root matches the chain's new root and `MASP.isKnownRoot()` is true.
+## Topology
+
+```
+host process (vitest globalSetup)
+  ├─ stack.up()            postgres + anvil (testcontainers)
+  ├─ stack.deploy()        forge script Deploy.s.sol → addresses
+  ├─ stack.upBackend()     ingester, fmd-indexer, explorer-indexer,
+  │                         fmd-webserver, explorer-webserver, relayer
+  └─ vitest tests run on host, talking to mapped ports
+                              (anvil :ephemeral, fmd, explorer, relayer)
+```
 
 ## Prereqs
 
-- Docker + Docker Compose v2.
-- `just` (`brew install just`).
-- Circuits build artifacts present at `circuits/build/` — run
-  `cd circuits && just rebuild && just rebuild-tree` once.
+- Docker (Docker Desktop or colima).
+- `forge` + `anvil` from the foundry toolchain (host).
+- Backend service images built locally:
+  ```bash
+  cd backend && for c in ingester fmd-indexer fmd-webserver explorer-indexer explorer-webserver; do
+      docker build --build-arg PACKAGE=$c -t lelantos/$c:dev -f Dockerfile .
+  done
+  docker build -f backend/crates/relayer/Dockerfile -t lelantos/relayer:dev .
+  ```
+- Circuit artifacts at `circuits/build/2x2_final.zkey` + `circuits/build/2x2_js/2x2.wasm` —
+  produced by `cd circuits && just rebuild`.
 
 ## Commands
 
 ```bash
-just test          # Full flow: deploy → backend → run tests → tear down.
-just up            # Same as test but doesn't run runner. For poking.
-just down          # Tear down + remove volume.
-just logs <svc>    # Tail one service.
+just test       # vitest globalSetup → stack up → forge deploy → 4 tests → tear down
+just up         # bring stack up + keep alive (ctrl-c to drop). prints urls.
+just deploy     # bring up postgres+anvil, deploy contracts, print addresses, tear down
+just down       # best-effort docker prune for orphan containers/networks
 ```
+
+`E2E_KEEP_ALIVE=1 just test` leaves the stack running on test exit so
+you can `curl` the indexers / mapped ports for manual inspection.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `compose.yml` | Full stack; profiles `deploy` (one-shot deployer) + `test` (runner). |
-| `../backend/crates/relayer/Dockerfile` | Rust relayer + tree_update circuit artifacts baked in. |
-| `Dockerfile.deployer` | Foundry + cast; runs `forge script Deploy.s.sol`. |
-| `Dockerfile.runner` | Node + TS + the SDK + ethers; vitest. |
-| `relayer.toml` | Relayer config with placeholders; runtime env overrides them. |
-| `runner/` | TypeScript test driver (vitest). |
-| `runner/src/deposit-bundle.ts` | Builds transact_2x2 proof using SDK. |
-| `runner/tests/deposit-roundtrip.test.ts` | The actual e2e assertion. |
+| [config/](config/) | TOML configs mounted into backend containers (`ingester.toml`, `relayer.toml`, `explorer-indexer.toml`). |
+| [src/](src/) | TS test driver + stack lifecycle. Single npm package. |
+| [src/stack.ts](src/stack.ts) | `Stack` class — three-phase lifecycle (up / deploy / upBackend / down). |
+| [src/services.ts](src/services.ts) | Declarative `ServiceSpec` table for every container. |
+| [src/accounts.ts](src/accounts.ts) | Anvil deterministic accounts (DEPLOYER, RELAYER, PAYER, RECIPIENT). |
+| [src/constants.ts](src/constants.ts) | Single source for chain id, paths, ports, ABIs, timeouts, FMD γ, asset id. |
+| [src/scenario.ts](src/scenario.ts) | Test-side helpers — wallets, note recipes, ERC20 setup, indexer poll. |
+| [src/utils.ts](src/utils.ts) | Hex codecs, deterministic counter, log, signal, pollUntil. |
+| [src/setup.ts](src/setup.ts) | Vitest globalSetup hook. |
+| [src/orchestrate.ts](src/orchestrate.ts) | Standalone CLI (commander) for `up` / `deploy` / `down` / `urls`. |
+| [tests/](tests/) | Vitest specs. |
 
-## Anvil deterministic accounts (mnemonic `test test test … junk`)
+## Adding a new test
 
-| Index | Role | Address | Key (last 8 bytes) |
+1. Drop a `*.test.ts` under [tests/](tests/).
+2. Pull what you need from the SDK + `scenario.ts` + `utils.ts`:
+   ```ts
+   import { buildDeposit, RelayerClient, FmdClient, /* … */ } from "@lelantos-org/sdk";
+   import { makeWallet, noteFor, rngForOutput, inputSlotFor, setupErc20 } from "../src/scenario";
+   import { counter, hexToBytes, pollUntil } from "../src/utils";
+   import { env } from "../src/env";
+   import { RELAYER, PAYER } from "../src/accounts";
+   ```
+3. The vitest globalSetup has already booted the stack — `env.*` is
+   populated. Just open clients and go:
+   ```ts
+   const fmd = new FmdClient(env.fmdUrl, env.chainId);
+   const relayer = new RelayerClient(env.relayerUrl);
+   ```
+4. Each `it` should read as a story. SDK builders own the crypto +
+   prove; `scenario.ts` owns the test-only scaffolding.
+
+## Anvil deterministic accounts
+
+| Index | Role | Address | Used by |
 |---|---|---|---|
-| 0 | Deployer | `0xf39Fd6e51aad88F6F4ce6aB8827279cfFFb92266` | `0xac09…ff80` |
-| 1 | Relayer signer (SNARK-bound) | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` | `0x59c6…690d` |
-| 2 | Payer | `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` | `0x5de4…365a` |
-| 3 | Recipient | `0x90F79bf6EB2c4f870365E785982E1f101E93b906` | n/a |
+| 0 | Deployer | `0xf39F…2266` | `forge script Deploy.s.sol` |
+| 1 | Relayer signer | `0x7099…79C8` | `RELAYER_CHAIN_*_SIGNER_KEY`, `pubInputs.relayer` |
+| 2 | Payer | `0x3C44…93BC` | ERC20 source for deposits, bundle `payerAddress` |
+| 3 | Recipient | `0x90F7…b906` | Withdraw destination, bundle `recipientAddress` |
 
 ## Caveats
 
-- Single chain (`chain_id=31337`). Multi-chain not yet wired.
+- Single chain (`chain_id=31337`). Multi-chain not wired.
 - Relayer uses in-process ark-circom prover. Slower than rapidsnark;
   acceptable for e2e.
-- All services share docker network `lelantos-e2e`. `just down` cleans
-  it up. If you ctrl-C mid-run, run `just down` to fully reset.
-
-## CI
-
-`.github/workflows/e2e.yml` runs `just test` on PRs. Cache layers:
-foundry submodule cache + cargo cache + npm cache.
+- macOS + colima: `setup.ts` auto-resolves `DOCKER_HOST` from the active
+  context. Ryuk reaper is disabled (vitest globalTeardown handles
+  cleanup).
+- If you `kill -9` the test process, run `just down` to prune any
+  orphaned containers/networks.
