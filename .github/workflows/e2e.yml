@@ -175,8 +175,9 @@ jobs:
           docker ps -a > /tmp/e2e-logs/ps.txt || true
           for cid in $(docker ps -aq); do
             name=$(docker inspect --format='{{.Name}}' "$cid" | sed 's|^/||')
-            docker logs "$cid" > "/tmp/e2e-logs/${name}.log" 2>&1 || true
+            docker logs "$cid" > "/tmp/e2e-logs/docker-${name}.log" 2>&1 || true
           done
+          # Streamed per-service logs (alias.log) live alongside; preserved as-is.
 
       - name: Upload logs artifact
         if: failure()

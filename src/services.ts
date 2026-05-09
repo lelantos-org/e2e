@@ -2,6 +2,7 @@
 // one helper to start a row. Adding/changing a service is a data edit —
 // the imperative orchestration in stack.ts stays small.
 
+import { createWriteStream, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -190,5 +191,16 @@ export async function runService(
             })),
         );
     }
+
+    // Stream logs to /tmp/e2e-logs/<alias>.log so failures (where
+    // testcontainers reaps the container) still leave a trace.
+    const logDir = process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
+    mkdirSync(logDir, { recursive: true });
+    const sink = createWriteStream(resolve(logDir, `${spec.alias}.log`), { flags: "a" });
+    c = c.withLogConsumer(async (stream) => {
+        stream.on("data", (line) => sink.write(line));
+        stream.on("err", (line) => sink.write(line));
+    });
+
     return c.start();
 }
