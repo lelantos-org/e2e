@@ -161,6 +161,8 @@ export function backendSpecs(masp: string): BackendServices {
             mounts: [{ configFile: "relayer.toml", target: "/etc/relayer.toml" }],
             port: PORT.RELAYER,
             wait: Wait.forListeningPorts(),
+            // Prover loads wasm/r1cs/zkey before binding 3003. Slow on CI.
+            startupMs: 240_000,
         },
     };
 }
