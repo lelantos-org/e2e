@@ -30,7 +30,9 @@ jobs:
     timeout-minutes: 75
 
     env:
-      CIRCOM_VERSION: v2.2.3
+      # Pinned circuits release. Bump in lockstep with verifier sols
+      # committed to lelantos-org/contracts (vkey must match this zkey).
+      CIRCUITS_RELEASE: v0.1.0
 
     steps:
       - name: Free disk space
@@ -60,7 +62,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
-            vendor/circuits/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -81,55 +82,25 @@ jobs:
         with:
           workspaces: vendor/backend
 
-      - name: Cache circom binary
-        id: cache-circom
-        uses: actions/cache@v4
-        with:
-          path: /usr/local/bin/circom
-          key: circom-${{ runner.os }}-${{ env.CIRCOM_VERSION }}
-
-      - name: Install circom
-        if: steps.cache-circom.outputs.cache-hit != 'true'
-        run: |
-          curl -L "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
-            -o /tmp/circom
-          chmod +x /tmp/circom
-          sudo mv /tmp/circom /usr/local/bin/circom
-          circom --version
-
-      - name: Cache ptau files
-        uses: actions/cache@v4
-        with:
-          path: |
-            vendor/circuits/ptau/powersOfTau28_hez_final_17.ptau
-            vendor/circuits/ptau/powersOfTau28_hez_final_20.ptau
-          key: ptau-v1
-
-      - name: Restore circuit build cache
-        id: cache-circuits
-        uses: actions/cache/restore@v4
-        with:
-          path: vendor/circuits/build
-          key: circuits-${{ runner.os }}-${{ hashFiles('.gitmodules', 'vendor/circuits/src/**', 'vendor/circuits/justfile', 'vendor/circuits/package-lock.json') }}
-
-      - name: Build circuits
-        if: steps.cache-circuits.outputs.cache-hit != 'true'
-        working-directory: vendor/circuits
+      # Pull prebuilt circuit artifacts from circuits repo release.
+      # Avoids running the phase-2 trusted setup in CI; vkey baked into the
+      # zkey here matches the committed Verifier.sol / TreeUpdateBatchVerifier.sol.
+      # Bump CIRCUITS_RELEASE in lockstep with the verifier sols.
+      - name: Fetch circuit artifacts
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
-          npm ci
-          just rebuild
-          just rebuild-batch
-
-      # Save right after build so a later step failing doesn't waste the
-      # circuit work (zkey gen is the slowest part of the job).
-      - name: Save circuit build cache
-        if: steps.cache-circuits.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: vendor/circuits/build
-          key: ${{ steps.cache-circuits.outputs.cache-primary-key }}
+          mkdir -p vendor/circuits/build/2x2_js vendor/circuits/build/tree_update_batch_js
+          gh release download "$CIRCUITS_RELEASE" \
+            --repo lelantos-org/circuits \
+            --pattern '2x2.wasm' \
+            --pattern '2x2_final.zkey' \
+            --pattern 'tree_update_batch.wasm' \
+            --pattern 'tree_update_batch.r1cs' \
+            --pattern 'tree_update_batch_final.zkey' \
+            --dir vendor/circuits/build
+          mv vendor/circuits/build/2x2.wasm vendor/circuits/build/2x2_js/2x2.wasm
+          mv vendor/circuits/build/tree_update_batch.wasm vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
 
       - name: Verify circuit artifacts
         run: |
@@ -194,7 +165,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /tmp/docker-images/relayer.tar
-          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.circuits }}-${{ steps.shas.outputs.rl_dockerfile }}
+          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ env.CIRCUITS_RELEASE }}-${{ steps.shas.outputs.rl_dockerfile }}
 
       - name: Build / load images
         env:
