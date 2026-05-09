@@ -51,12 +51,16 @@ jobs:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
-          git submodule update --init --recursive
+          git submodule update --init --recursive --depth=1
 
       - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            vendor/circuits/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -101,9 +105,9 @@ jobs:
             vendor/circuits/ptau/powersOfTau28_hez_final_20.ptau
           key: ptau-v1
 
-      - name: Cache circuit build
+      - name: Restore circuit build cache
         id: cache-circuits
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: vendor/circuits/build
           key: circuits-${{ runner.os }}-${{ hashFiles('.gitmodules', 'vendor/circuits/src/**', 'vendor/circuits/justfile', 'vendor/circuits/package-lock.json') }}
@@ -118,6 +122,15 @@ jobs:
           just rebuild
           just rebuild-batch
 
+      # Save right after build so a later step failing doesn't waste the
+      # circuit work (zkey gen is the slowest part of the job).
+      - name: Save circuit build cache
+        if: steps.cache-circuits.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: vendor/circuits/build
+          key: ${{ steps.cache-circuits.outputs.cache-primary-key }}
+
       - name: Verify circuit artifacts
         run: |
           test -f vendor/circuits/build/2x2_final.zkey
@@ -129,30 +142,152 @@ jobs:
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build backend service images
+      # Resolve submodule SHAs once; use as per-image cache keys.
+      - name: Resolve submodule SHAs
+        id: shas
+        run: |
+          echo "backend=$(git -C vendor/backend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "circuits=$(git -C vendor/circuits rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "be_dockerfile=$(sha256sum vendor/backend/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "rl_dockerfile=$(sha256sum vendor/backend/crates/relayer/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Per-image GHA cache. Backend-only services key on backend SHA +
+      # backend Dockerfile. Relayer also keys on circuits SHA + its own
+      # Dockerfile (it bakes circuit artifacts in).
+      - name: Cache image — ingester
+        id: cache-ingester
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/ingester.tar
+          key: img-ingester-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
+      - name: Cache image — fmd-indexer
+        id: cache-fmd-indexer
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/fmd-indexer.tar
+          key: img-fmd-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
+      - name: Cache image — explorer-indexer
+        id: cache-explorer-indexer
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/explorer-indexer.tar
+          key: img-explorer-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
+      - name: Cache image — fmd-webserver
+        id: cache-fmd-webserver
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/fmd-webserver.tar
+          key: img-fmd-webserver-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
+      - name: Cache image — explorer-webserver
+        id: cache-explorer-webserver
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/explorer-webserver.tar
+          key: img-explorer-webserver-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
+      - name: Cache image — relayer
+        id: cache-relayer
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/relayer.tar
+          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.circuits }}-${{ steps.shas.outputs.rl_dockerfile }}
+
+      - name: Build / load images
+        env:
+          HIT_INGESTER: ${{ steps.cache-ingester.outputs.cache-hit }}
+          HIT_FMD_INDEXER: ${{ steps.cache-fmd-indexer.outputs.cache-hit }}
+          HIT_EXPLORER_INDEXER: ${{ steps.cache-explorer-indexer.outputs.cache-hit }}
+          HIT_FMD_WEBSERVER: ${{ steps.cache-fmd-webserver.outputs.cache-hit }}
+          HIT_EXPLORER_WEBSERVER: ${{ steps.cache-explorer-webserver.outputs.cache-hit }}
+          HIT_RELAYER: ${{ steps.cache-relayer.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          for pkg in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver; do
-            echo "==> Building lelantos/$pkg:dev"
-            docker buildx build --load \
-              --build-arg PACKAGE=$pkg \
-              -f vendor/backend/Dockerfile \
-              -t lelantos/$pkg:dev \
-              --cache-from type=gha,scope=$pkg \
-              --cache-to   type=gha,scope=$pkg,mode=max \
-              vendor/backend
-          done
+          mkdir -p /tmp/docker-images
 
-      # relayer Dockerfile expects context with backend/ + circuits/ siblings.
-      # vendor/ provides exactly that.
-      - name: Build relayer image
-        run: |
-          docker buildx build --load \
-            -f vendor/backend/crates/relayer/Dockerfile \
-            -t lelantos/relayer:dev \
-            --cache-from type=gha,scope=relayer \
-            --cache-to   type=gha,scope=relayer,mode=max \
-            vendor
+          load_or_build() {
+            local pkg="$1" hit="$2" df="$3" ctx="$4"
+            local tar="/tmp/docker-images/${pkg}.tar"
+            if [[ "$hit" == "true" ]]; then
+              echo "==> Loading cached lelantos/$pkg:dev"
+              docker load -i "$tar"
+              return
+            fi
+            echo "==> Building lelantos/$pkg:dev"
+            local build_args=()
+            if [[ "$df" == "vendor/backend/Dockerfile" ]]; then
+              build_args=(--build-arg "PACKAGE=$pkg")
+            fi
+            docker buildx build --load \
+              "${build_args[@]}" \
+              -f "$df" \
+              -t "lelantos/$pkg:dev" \
+              --cache-from "type=gha,scope=$pkg" \
+              --cache-to   "type=gha,scope=$pkg,mode=max" \
+              "$ctx"
+            docker save "lelantos/$pkg:dev" -o "$tar"
+          }
+
+          # Backend-only services in parallel.
+          pids=()
+          load_or_build ingester           "$HIT_INGESTER"           vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build fmd-indexer        "$HIT_FMD_INDEXER"        vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build explorer-indexer   "$HIT_EXPLORER_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build fmd-webserver      "$HIT_FMD_WEBSERVER"      vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build explorer-webserver "$HIT_EXPLORER_WEBSERVER" vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          fail=0
+          for pid in "${pids[@]}"; do wait "$pid" || fail=1; done
+          [[ $fail -eq 0 ]]
+
+          # Relayer (different Dockerfile + context).
+          load_or_build relayer "$HIT_RELAYER" vendor/backend/crates/relayer/Dockerfile vendor
+
+      # Save each image cache immediately after build, so later-step
+      # failures don't waste the build work. Skip when already a cache hit.
+      - name: Save image cache — ingester
+        if: steps.cache-ingester.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/ingester.tar
+          key: ${{ steps.cache-ingester.outputs.cache-primary-key }}
+
+      - name: Save image cache — fmd-indexer
+        if: steps.cache-fmd-indexer.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/fmd-indexer.tar
+          key: ${{ steps.cache-fmd-indexer.outputs.cache-primary-key }}
+
+      - name: Save image cache — explorer-indexer
+        if: steps.cache-explorer-indexer.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/explorer-indexer.tar
+          key: ${{ steps.cache-explorer-indexer.outputs.cache-primary-key }}
+
+      - name: Save image cache — fmd-webserver
+        if: steps.cache-fmd-webserver.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/fmd-webserver.tar
+          key: ${{ steps.cache-fmd-webserver.outputs.cache-primary-key }}
+
+      - name: Save image cache — explorer-webserver
+        if: steps.cache-explorer-webserver.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/explorer-webserver.tar
+          key: ${{ steps.cache-explorer-webserver.outputs.cache-primary-key }}
+
+      - name: Save image cache — relayer
+        if: steps.cache-relayer.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/relayer.tar
+          key: ${{ steps.cache-relayer.outputs.cache-primary-key }}
 
       - name: Verify image tags
         run: |
