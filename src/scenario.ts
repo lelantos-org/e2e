@@ -29,7 +29,7 @@ import { env } from "./env";
 import { cmToHex, pollUntil } from "./utils";
 
 // Re-exported so test files can pull all the knobs from one module.
-export { ASSET, FMD_GAMMA, MASP_ABI, TREE_DEPTH } from "./constants";
+export { ASSET, FEE_BPS, FMD_GAMMA, MASP_ABI, MOCK_ERC20_ABI, TREE_DEPTH, feeFor, withFee } from "./constants";
 export { counter, cmToHex, nfToHex } from "./utils";
 
 // ──────────────────────────────────────────────────────────────────────
@@ -98,15 +98,18 @@ export interface Erc20Helpers {
     balanceOf(addr: string): Promise<bigint>;
 }
 
+/// Mints `initialMint` to the payer and grants Permit2 unbounded
+/// allowance. Permit2 is the spender now (MASP pulls funds via
+/// `permitWitnessTransferFrom` against the depositor's witness sig).
 export async function setupErc20(
     payer: ethers.Wallet,
     tokenAddr: string,
-    maspAddr: string,
+    spender: string,
     initialMint: bigint,
 ): Promise<Erc20Helpers> {
     const c = new ethers.Contract(tokenAddr, MOCK_ERC20_ABI, payer);
     await (await c.mint(payer.address, initialMint)).wait();
-    await (await c.approve(maspAddr, initialMint)).wait();
+    await (await c.approve(spender, ethers.MaxUint256)).wait();
     return {
         contract: c,
         balanceOf: async (addr) => (await c.balanceOf(addr)) as bigint,
@@ -125,12 +128,12 @@ const MOCK_WETH9_ABI = [
 export async function setupWeth(
     payer: ethers.Wallet,
     wethAddr: string,
-    maspAddr: string,
+    spender: string,
     amount: bigint,
 ): Promise<Erc20Helpers> {
     const c = new ethers.Contract(wethAddr, MOCK_WETH9_ABI, payer);
     await (await c.deposit({ value: amount })).wait();
-    await (await c.approve(maspAddr, amount)).wait();
+    await (await c.approve(spender, ethers.MaxUint256)).wait();
     return {
         contract: c,
         balanceOf: async (addr) => (await c.balanceOf(addr)) as bigint,

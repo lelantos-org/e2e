@@ -14,7 +14,7 @@ image.
 ```
 host process (vitest globalSetup)
   ├─ stack.up()            postgres + anvil (testcontainers)
-  ├─ stack.deploy()        forge script Deploy.s.sol → addresses
+  ├─ stack.deploy()        forge script DeployTest.s.sol → addresses
   ├─ stack.upBackend()     ingester, fmd-indexer, explorer-indexer,
   │                         fmd-webserver, explorer-webserver, relayer
   └─ vitest tests run on host, talking to mapped ports
@@ -87,7 +87,7 @@ you can `curl` the indexers / mapped ports for manual inspection.
 
 | Index | Role | Address | Used by |
 |---|---|---|---|
-| 0 | Deployer | `0xf39F…2266` | `forge script Deploy.s.sol` |
+| 0 | Deployer | `0xf39F…2266` | `forge script DeployTest.s.sol` |
 | 1 | Relayer signer | `0x7099…79C8` | `RELAYER_CHAIN_*_SIGNER_KEY`, `pubInputs.relayer` |
 | 2 | Payer | `0x3C44…93BC` | ERC20 source for deposits, bundle `payerAddress` |
 | 3 | Recipient | `0x90F7…b906` | Withdraw destination, bundle `recipientAddress` |

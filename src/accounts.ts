@@ -6,9 +6,9 @@ export interface AnvilAccount {
     privateKey: string;
 }
 
-/// acct[0]. Runs `forge script Deploy.s.sol`. Funded by anvil with
+/// acct[0]. Runs `forge script DeployTest.s.sol`. Funded by anvil with
 /// 10000 ETH; pays gas for verifier + masp + token deployment. Address
-/// is hard-coded into Deploy.s.sol's `tx.origin` defaults for treasury
+/// is hard-coded into DeployTest.s.sol's `tx.origin` defaults for treasury
 /// + owner.
 export const DEPLOYER: AnvilAccount = {
     address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",

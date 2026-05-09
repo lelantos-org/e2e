@@ -1,0 +1,178 @@
+name: E2E
+
+# Submodules (backend, circuits, contracts) require CHECKOUT_TOKEN: PAT or
+# fine-grained token with read access to lelantos-org/{backend,circuits,contracts}.
+# Default GITHUB_TOKEN can't clone other private repos.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-e2e
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (single job)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    env:
+      CIRCOM_VERSION: v2.1.9
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      # .gitmodules uses SSH URLs (git@github.com:...) for local dev.
+      # CI has no SSH key, so rewrite to HTTPS with token before init.
+      - name: Init submodules (HTTPS via token)
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Cache cargo (backend)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/backend
+
+      - name: Cache circom binary
+        id: cache-circom
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/circom
+          key: circom-${{ runner.os }}-${{ env.CIRCOM_VERSION }}
+
+      - name: Install circom
+        if: steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          curl -L "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
+            -o /tmp/circom
+          chmod +x /tmp/circom
+          sudo mv /tmp/circom /usr/local/bin/circom
+          circom --version
+
+      - name: Cache ptau files
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/circuits/ptau/powersOfTau28_hez_final_17.ptau
+            vendor/circuits/ptau/powersOfTau28_hez_final_20.ptau
+          key: ptau-v1
+
+      - name: Cache circuit build
+        id: cache-circuits
+        uses: actions/cache@v4
+        with:
+          path: vendor/circuits/build
+          key: circuits-${{ runner.os }}-${{ hashFiles('.gitmodules', 'vendor/circuits/src/**', 'vendor/circuits/justfile', 'vendor/circuits/package-lock.json') }}
+
+      - name: Build circuits
+        if: steps.cache-circuits.outputs.cache-hit != 'true'
+        working-directory: vendor/circuits
+        run: |
+          npm ci
+          just rebuild
+          just rebuild-batch
+
+      - name: Verify circuit artifacts
+        run: |
+          test -f vendor/circuits/build/2x2_final.zkey
+          test -f vendor/circuits/build/2x2_js/2x2.wasm
+          test -f vendor/circuits/build/tree_update_batch_final.zkey
+          test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
+          test -f vendor/circuits/build/tree_update_batch.r1cs
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend service images
+        run: |
+          set -euo pipefail
+          for pkg in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver; do
+            echo "==> Building lelantos/$pkg:dev"
+            docker buildx build --load \
+              --build-arg PACKAGE=$pkg \
+              -f vendor/backend/Dockerfile \
+              -t lelantos/$pkg:dev \
+              --cache-from type=gha,scope=$pkg \
+              --cache-to   type=gha,scope=$pkg,mode=max \
+              vendor/backend
+          done
+
+      # relayer Dockerfile expects context with backend/ + circuits/ siblings.
+      # vendor/ provides exactly that.
+      - name: Build relayer image
+        run: |
+          docker buildx build --load \
+            -f vendor/backend/crates/relayer/Dockerfile \
+            -t lelantos/relayer:dev \
+            --cache-from type=gha,scope=relayer \
+            --cache-to   type=gha,scope=relayer,mode=max \
+            vendor
+
+      - name: Verify image tags
+        run: |
+          for img in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer; do
+            docker image inspect lelantos/$img:dev >/dev/null
+          done
+
+      - name: Install e2e deps
+        run: npm ci
+
+      - name: Run e2e
+        run: npm test
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          docker ps -a > /tmp/e2e-logs/ps.txt || true
+          for cid in $(docker ps -aq); do
+            name=$(docker inspect --format='{{.Name}}' "$cid" | sed 's|^/||')
+            docker logs "$cid" > "/tmp/e2e-logs/${name}.log" 2>&1 || true
+          done
+
+      - name: Upload logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-container-logs
+          path: /tmp/e2e-logs
+          if-no-files-found: ignore
+          retention-days: 7

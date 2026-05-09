@@ -15,6 +15,6 @@ signer_key_hex = "0x000000000000000000000000000000000000000000000000000000000000
 receipt_timeout_s = 60
 
 [prover]
-wasm_path = "/app/tree_update_js/tree_update.wasm"
-r1cs_path = "/app/tree_update.r1cs"
-zkey_path = "/app/tree_update_final.zkey"
+wasm_path = "/app/tree_update_batch_js/tree_update_batch.wasm"
+r1cs_path = "/app/tree_update_batch.r1cs"
+zkey_path = "/app/tree_update_batch_final.zkey"

@@ -12,7 +12,7 @@ import {
 } from "testcontainers";
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts";
-import { CHAIN_ID, CONTRACTS_DIR } from "./constants";
+import { CHAIN_ID, CONTRACTS_DIR, FEE_BPS } from "./constants";
 import { ANVIL, backendSpecs, POSTGRES, runService } from "./services";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +28,8 @@ export interface Addresses {
     /// Token id (from the asset registry) → ERC20 address.
     tokens: Record<number, string>;
     weth?: string;
+    /// Uniswap Permit2 deployment used by MASP for deposit pulls.
+    permit2: string;
 }
 
 export interface Urls {
@@ -44,6 +46,7 @@ export interface StackEnv extends Urls {
     payerAddress: string;
     payerKey: string;
     recipientAddress: string;
+    permit2: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -68,20 +71,24 @@ export class Stack {
         return { rpc: this.rpcUrl() };
     }
 
-    /// Phase 2 — host-side forge deploy. Parses Deploy.s.sol's
+    /// Phase 2 — host-side forge deploy. Parses DeployTest.s.sol's
     /// KEY=0xADDR stdout into a typed `Addresses`.
     async deploy(): Promise<Addresses> {
         const rpcUrl = this.rpcUrl();
         const { stdout } = await execFileAsync(
             "forge",
             [
-                "script", "script/Deploy.s.sol",
+                "script", "script/DeployTest.s.sol:DeployTest",
                 "--rpc-url", rpcUrl,
                 "--private-key", DEPLOYER.privateKey,
                 "--broadcast",
                 "--disable-code-size-limit",
             ],
-            { cwd: CONTRACTS_DIR, maxBuffer: 64 * 1024 * 1024 },
+            {
+                cwd: CONTRACTS_DIR,
+                maxBuffer: 64 * 1024 * 1024,
+                env: { ...process.env, MASP_FEE_BPS: FEE_BPS.toString() },
+            },
         );
 
         this.addresses = parseDeployOutput(stdout);
@@ -126,6 +133,7 @@ export class Stack {
             payerAddress: PAYER.address,
             payerKey: PAYER.privateKey,
             recipientAddress: RECIPIENT.address,
+            permit2: this.addresses.permit2,
         };
     }
 
@@ -159,11 +167,11 @@ function hostUrl(c: StartedTestContainer, internalPort: number): string {
 
 function parseDeployOutput(stdout: string): Addresses {
     const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-    const re = /(VERIFIER|TREE_UPDATE_VERIFIER|MASP|TOKEN_\d+|WETH)=(0x[0-9a-fA-F]{40})/g;
+    const re = /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WETH|PERMIT2)=(0x[0-9a-fA-F]{40})/g;
     const found = new Map<string, string>();
     for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
 
-    for (const k of ["VERIFIER", "TREE_UPDATE_VERIFIER", "MASP"]) {
+    for (const k of ["VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"]) {
         if (!found.has(k)) {
             throw new Error(`deploy: missing ${k} in forge output:\n${stripped}`);
         }
@@ -177,9 +185,10 @@ function parseDeployOutput(stdout: string): Addresses {
 
     return {
         verifier: found.get("VERIFIER")!,
-        treeUpdateVerifier: found.get("TREE_UPDATE_VERIFIER")!,
+        treeUpdateVerifier: found.get("TREE_UPDATE_BATCH_VERIFIER")!,
         masp: found.get("MASP")!,
         tokens,
         weth: found.get("WETH"),
+        permit2: found.get("PERMIT2")!,
     };
 }

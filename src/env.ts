@@ -22,5 +22,6 @@ export const env = {
     payerAddress: req("PAYER_ADDRESS"),
     payerKey: req("PAYER_KEY"),
     recipientAddress: req("RECIPIENT_ADDRESS"),
+    permit2Address: req("PERMIT2_ADDRESS"),
     circuitsBuild: process.env.CIRCUITS_BUILD ?? CIRCUITS_BUILD_DIR,
 };

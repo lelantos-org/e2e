@@ -4,7 +4,7 @@
 //
 // Splits:
 //   - chain      : CHAIN_ID
-//   - paths      : REPO_ROOT, E2E_DIR, CONFIG_DIR, CONTRACTS_DIR, CIRCUITS_BUILD_DIR
+//   - paths      : E2E_DIR, CONFIG_DIR, CONTRACTS_DIR, CIRCUITS_BUILD_DIR
 //   - network    : DB_URL, ANVIL_RPC_INTERNAL, container ports
 //   - rust env   : BASE_RUST_ENV (DATABASE_URL + RUST_LOG)
 //   - runtime    : DEFAULT_STARTUP_MS
@@ -18,20 +18,20 @@ import { resolve } from "node:path";
 // ──────────────────────────────────────────────────────────────────────
 
 /// EVM chain id baked into anvil + every backend's `*_CHAIN_<id>_*` env
-/// var name. Changing this requires regenerating the asset-registry
-/// fixture so `pubAssetGen` matches the new chain.
+/// var name.
 export const CHAIN_ID = "31337";
 
 // ──────────────────────────────────────────────────────────────────────
 // Paths (host)
 // ──────────────────────────────────────────────────────────────────────
 
-// src/constants.ts → src → e2e → repo
+// src/constants.ts → src → e2e
+// backend, circuits, contracts are git submodules under e2e/vendor/.
 export const E2E_DIR = resolve(__dirname, "..");
-export const REPO_ROOT = resolve(E2E_DIR, "..");
 export const CONFIG_DIR = resolve(E2E_DIR, "config");
-export const CONTRACTS_DIR = resolve(REPO_ROOT, "contracts");
-export const CIRCUITS_BUILD_DIR = resolve(REPO_ROOT, "circuits", "build");
+export const VENDOR_DIR = resolve(E2E_DIR, "vendor");
+export const CONTRACTS_DIR = resolve(VENDOR_DIR, "contracts");
+export const CIRCUITS_BUILD_DIR = resolve(VENDOR_DIR, "circuits", "build");
 
 // ──────────────────────────────────────────────────────────────────────
 // Container network
@@ -89,6 +89,46 @@ export const FMD_GAMMA = 5;
 /// the mDAI slot.
 export const ASSET = 2n;
 
+/// Basis-point fee deployed on MASP. 500 bps = 5%. Threaded into
+/// `DeployTest.s.sol` via `MASP_FEE_BPS` and used by tests to compute
+/// expected balance deltas + accrued treasury fees.
+export const FEE_BPS = 500n;
+
+/// Per-asset `scale` mirroring `contracts/test/fixtures/asset_registry.json`.
+/// Contract converts publicIn-units → token base-units via `inAmt = publicIn * scale`,
+/// then `fee = inAmt * feeBps / 10000`. Tests compute funding / maxTotal / accrued
+/// fee in base-units, so every helper that crosses the on-chain boundary takes an
+/// asset id and looks up its scale here.
+export const SCALES: Record<string, bigint> = {
+    "1": 10_000_000_000n, // WETH (18 dec)
+    "2": 10_000_000_000n, // mDAI (18 dec)
+    "3": 1n,              // mWBTC (8 dec)
+};
+
+export function scaleFor(asset: bigint): bigint {
+    const s = SCALES[asset.toString()];
+    if (s === undefined) throw new Error(`scaleFor: unknown asset id ${asset}`);
+    return s;
+}
+
+/// Token base-units principal (`inAmt = publicIn * scale`).
+export function baseAmt(amount: bigint, asset: bigint = ASSET): bigint {
+    return amount * scaleFor(asset);
+}
+
+/// Token base-units fee for a publicIn-units amount, matching contract math:
+///   fee = (publicIn * scale * feeBps) / 10000
+export function feeFor(amount: bigint, asset: bigint = ASSET): bigint {
+    const inAmt = amount * scaleFor(asset);
+    return (inAmt * FEE_BPS) / 10000n;
+}
+
+/// Token base-units total (`inAmt + fee`) for a publicIn-units amount. Use
+/// for ERC20 funding sizes, Permit2 `maxTotal`, etc.
+export function withFee(amount: bigint, asset: bigint = ASSET): bigint {
+    return amount * scaleFor(asset) + feeFor(amount, asset);
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Solidity ABIs
 // ──────────────────────────────────────────────────────────────────────
@@ -98,6 +138,11 @@ export const MASP_ABI = [
     "function currentRoot() view returns (bytes32)",
     "function committedCount() view returns (uint64)",
     "function spent(bytes32) view returns (bool)",
+    "function feeBps() view returns (uint16)",
+    "function treasury() view returns (address)",
+    "function accruedFee(address) view returns (uint256)",
+    "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
+    "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",
 ] as const;
 
 export const MOCK_ERC20_ABI = [

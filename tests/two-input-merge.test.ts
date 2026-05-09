@@ -4,49 +4,27 @@
 //   2. deposit 70 → alice note B.
 //   3. transfer with inputs [A, B] (no null pad) → output 100 to bob,
 //      0-pad change back to alice.
-// Asserts:
-//   - both nullifiers land in masp.spent
-//   - value conservation: bob's output value = A.value + B.value
-//   - tree advances by exactly 2 leaves on the transfer (one per output)
-//
-// Other e2e tests only ever use [slot, null]; this exercises the
-// [slot, slot] code path in buildTransfer + the circuit's two-real-input
-// witness layout.
+// Asserts both nullifiers spent, value conservation, tree advances by 2.
 
-import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
-
-import {
-    buildNullifierFromNsk,
-    buildTransfer,
-    FmdClient,
-    Jubjub,
-    type Note,
-    Poseidon,
-    RelayerClient,
-    type SpendableCachedNote,
-} from "@lelantos-org/sdk";
 
 import { env } from "../src/env";
 import {
+    buildNullifierFromNsk,
     counter,
-    inputSlotFor,
-    MASP_ABI,
+    deposit,
+    type Harness,
     makeWallet,
-    nfToHex,
-    noteFor,
-    rngForOutput,
-    setupErc20,
-    type TestWallet,
-    waitForCm,
-} from "../src/scenario";
-import {
-    currentRoot,
-    depositToWallet,
-    makeBundleCommon,
     newAuxRng,
-    waitForFmdHealth,
-} from "./_shared";
+    nfToHex,
+    type Note,
+    noteFor,
+    setupHarness,
+    type SpendableCachedNote,
+    submitTransfer,
+    type TestWallet,
+    withFee,
+} from "../src/harness";
 
 const ALICE_NSK = 11n;
 const BOB_NSK = 22n;
@@ -55,11 +33,7 @@ const DEPOSIT_B = 70n;
 const TOTAL = DEPOSIT_A + DEPOSIT_B;
 
 describe("two-input merge transfer", () => {
-    let P: Poseidon;
-    let J: Jubjub;
-    let masp: ethers.Contract;
-    let relayer: RelayerClient;
-    let fmd: FmdClient;
+    let h: Harness;
     let alice: TestWallet;
     let bob: TestWallet;
     let noteA: SpendableCachedNote;
@@ -70,69 +44,45 @@ describe("two-input merge transfer", () => {
     const auxRng = newAuxRng();
 
     beforeAll(async () => {
-        P = await Poseidon.build();
-        J = await Jubjub.build();
-        const provider = new ethers.JsonRpcProvider(env.rpcUrl);
-        const payer = new ethers.Wallet(env.payerKey, provider);
-        masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
-        relayer = new RelayerClient(env.relayerUrl);
-        fmd = new FmdClient(env.fmdUrl, env.chainId);
-        await setupErc20(payer, env.token2, env.maspAddress, TOTAL);
-
-        await waitForFmdHealth();
-
-        alice = makeWallet(P, J, ALICE_NSK);
-        bob = makeWallet(P, J, BOB_NSK);
+        h = await setupHarness({
+            fund: [{ kind: "erc20", token: env.token2, amount: withFee(TOTAL) }],
+        });
+        alice = makeWallet(h.P, h.J, ALICE_NSK);
+        bob = makeWallet(h.P, h.J, BOB_NSK);
     });
 
     it("two deposits give alice two spendable notes", async () => {
-        noteA = await depositToWallet({
-            P, J, relayer, fmd, wallet: alice, nsk: ALICE_NSK,
-            amount: DEPOSIT_A, rng: aliceRng, auxRng,
-        });
-        noteB = await depositToWallet({
-            P, J, relayer, fmd, wallet: alice, nsk: ALICE_NSK,
-            amount: DEPOSIT_B, rng: aliceRng, auxRng,
-        });
+        noteA = await deposit({ h, wallet: alice, nsk: ALICE_NSK, amount: DEPOSIT_A, rng: aliceRng, auxRng });
+        noteB = await deposit({ h, wallet: alice, nsk: ALICE_NSK, amount: DEPOSIT_B, rng: aliceRng, auxRng });
         expect(noteA.note.value).toBe(DEPOSIT_A);
         expect(noteB.note.value).toBe(DEPOSIT_B);
-        // Distinct leaves.
         expect(noteA.leafIndex).not.toBe(noteB.leafIndex);
     });
 
     it("transfer consumes BOTH inputs, lands a single 100-note for bob", async () => {
         const bobOut: Note = noteFor(bob, TOTAL, bobRng);
         const aliceChange: Note = noteFor(alice, 0n, aliceRng);
+        const before = await h.masp.committedCount();
 
-        const maspBalBefore = await masp.committedCount();
-
-        const built = await buildTransfer({
-            ...makeBundleCommon(P, J),
-            inputs: [
-                await inputSlotFor(P, fmd, noteA),
-                await inputSlotFor(P, fmd, noteB),
-            ],
-            merkleRoot: await currentRoot(fmd),
+        await submitTransfer({
+            h,
+            inputs: [noteA, noteB],
             outputs: [bobOut, aliceChange],
-            outputRecipients: [bob.recipient, alice.recipient],
-            outputRandomness: [rngForOutput(auxRng), rngForOutput(auxRng)],
+            recipients: [bob, alice],
+            auxRng,
         });
-        await relayer.submitTransact(built.payload);
-
-        // Both outputs indexed.
-        await waitForCm(fmd, built.cm[0]);
-        await waitForCm(fmd, built.cm[1]);
 
         // Both nullifiers spent on-chain.
-        const nfA = buildNullifierFromNsk(P, ALICE_NSK, noteA.note.rho);
-        const nfB = buildNullifierFromNsk(P, ALICE_NSK, noteB.note.rho);
-        expect(await masp.spent(nfToHex(nfA))).toBe(true);
-        expect(await masp.spent(nfToHex(nfB))).toBe(true);
-
+        const nfA = buildNullifierFromNsk(h.P, ALICE_NSK, noteA.note.rho);
+        const nfB = buildNullifierFromNsk(h.P, ALICE_NSK, noteB.note.rho);
+        const spentA = await h.masp.spent(nfToHex(nfA));
+        const spentB = await h.masp.spent(nfToHex(nfB));
+        expect(spentA).toBe(true);
+        expect(spentB).toBe(true);
         // Tree advanced by exactly 2 leaves (one per output cm).
-        expect(await masp.committedCount()).toBe(maspBalBefore + 2n);
-
-        // Value conservation: bob's note carries the full sum.
+        const committedAfter = await h.masp.committedCount();
+        expect(committedAfter).toBe(before + 2n);
+        // Value conservation.
         expect(bobOut.value).toBe(DEPOSIT_A + DEPOSIT_B);
     });
 });

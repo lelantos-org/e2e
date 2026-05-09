@@ -85,4 +85,5 @@ function publishEnv(e: StackEnv): void {
     process.env.PAYER_ADDRESS = e.payerAddress;
     process.env.PAYER_KEY = e.payerKey;
     process.env.RECIPIENT_ADDRESS = e.recipientAddress;
+    process.env.PERMIT2_ADDRESS = e.permit2;
 }

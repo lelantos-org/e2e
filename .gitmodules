@@ -1,0 +1,9 @@
+[submodule "vendor/backend"]
+	path = vendor/backend
+	url = git@github.com:lelantos-org/backend.git
+[submodule "vendor/circuits"]
+	path = vendor/circuits
+	url = git@github.com:lelantos-org/circuits.git
+[submodule "vendor/contracts"]
+	path = vendor/contracts
+	url = git@github.com:lelantos-org/contracts.git
