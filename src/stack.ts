@@ -13,6 +13,7 @@ import {
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts";
 import { CHAIN_ID, CONTRACTS_DIR, FEE_BPS } from "./constants";
+import { preDeployPermit2 } from "./permit2";
 import { ANVIL, backendSpecs, POSTGRES, runService } from "./services";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +68,12 @@ export class Stack {
         const postgres = await runService(POSTGRES, this.network);
         const anvil = await runService(ANVIL, this.network);
         this.infra = [postgres, anvil];
+
+        // Pre-deploy canonical Permit2. DeployTest.s.sol's `DeployPermit2`
+        // lib only `vm.etch`s the bytecode (cheatcode-local), which gets
+        // dropped under `--broadcast` simulation; MASP ctor then reverts
+        // ZeroPermit2() because `permit2.code.length == 0` on-chain.
+        await preDeployPermit2(this.rpcUrl());
 
         return { rpc: this.rpcUrl() };
     }

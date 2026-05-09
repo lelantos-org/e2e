@@ -11,6 +11,9 @@ on:
   push:
     branches:
       - main
+  schedule:
+    # Nightly at 03:00 UTC. Off-peak GHA time, avoids workday concurrency.
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -61,7 +64,10 @@ jobs:
       - name: Setup Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # Pinned to match local dev (1.5.1). Newer "stable" breaks
+          # DeployPermit2().deployPermit2() under --broadcast → MASP ctor
+          # reverts ZeroPermit2(). Bump deliberately when verified.
+          version: v1.5.1
 
       - name: Install just
         uses: extractions/setup-just@v2
