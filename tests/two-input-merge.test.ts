@@ -10,19 +10,19 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env";
 import {
+    type Actor,
     buildNullifierFromNsk,
     counter,
     deposit,
     type Harness,
-    makeWallet,
     newAuxRng,
     nfToHex,
     type Note,
     noteFor,
+    setupActors,
     setupHarness,
     type SpendableCachedNote,
     submitTransfer,
-    type TestWallet,
     withFee,
 } from "../src/harness";
 
@@ -34,8 +34,8 @@ const TOTAL = DEPOSIT_A + DEPOSIT_B;
 
 describe("two-input merge transfer", () => {
     let h: Harness;
-    let alice: TestWallet;
-    let bob: TestWallet;
+    let alice: Actor;
+    let bob: Actor;
     let noteA: SpendableCachedNote;
     let noteB: SpendableCachedNote;
 
@@ -47,8 +47,10 @@ describe("two-input merge transfer", () => {
         h = await setupHarness({
             fund: [{ kind: "erc20", token: env.token2, amount: withFee(TOTAL) }],
         });
-        alice = makeWallet(h.P, h.J, ALICE_NSK);
-        bob = makeWallet(h.P, h.J, BOB_NSK);
+        ({ alice, bob } = await setupActors(h, {
+            alice: { nsk: ALICE_NSK },
+            bob: { nsk: BOB_NSK },
+        }));
     });
 
     it("two deposits give alice two spendable notes", async () => {

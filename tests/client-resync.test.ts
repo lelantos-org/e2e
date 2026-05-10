@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env";
 import {
+    type Actor,
     ASSET,
     cmToHex,
     counter,
@@ -18,16 +19,14 @@ import {
     deposit,
     filterRealMatches,
     type Harness,
-    makeWallet,
     newAuxRng,
     type Note,
     noteFor,
     pollUntil,
+    setupActors,
     setupHarness,
     type SpendableCachedNote,
-    subscribe,
     submitTransfer,
-    type TestWallet,
     withFee,
 } from "../src/harness";
 
@@ -45,9 +44,8 @@ const EXPECTED_BOB_TOTAL = TO_BOB_1 + TO_BOB_2;
 
 describe("cold-client resync", () => {
     let h: Harness;
-    let alice: TestWallet;
-    let bob: TestWallet;
-    let bobSubscriptionId: number;
+    let alice: Actor;
+    let bob: Actor;
     let aliceSpendable: SpendableCachedNote;
 
     const aliceRng = counter(0xcc_a1ce_0001n);
@@ -58,9 +56,10 @@ describe("cold-client resync", () => {
         h = await setupHarness({
             fund: [{ kind: "erc20", token: env.token2, amount: withFee(DEPOSIT_1 + DEPOSIT_2) }],
         });
-        alice = makeWallet(h.P, h.J, ALICE_NSK);
-        bob = makeWallet(h.P, h.J, BOB_NSK);
-        bobSubscriptionId = await subscribe(h.fmd, bob);
+        ({ alice, bob } = await setupActors(h, {
+            alice: { nsk: ALICE_NSK },
+            bob: { nsk: BOB_NSK, subscribe: true },
+        }));
     });
 
     it("activity sequence: 2 deposits + 2 transfers to bob", async () => {
@@ -110,7 +109,7 @@ describe("cold-client resync", () => {
         const matches = await pollUntil(
             async () => {
                 const ms = await cold.listMatches({
-                    subscription: bobSubscriptionId,
+                    subscription: bob.subscriptionId!,
                     limit: 100,
                 });
                 const r = filterRealMatches(h.P, h.J, bob, ms);

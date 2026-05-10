@@ -36,7 +36,7 @@ import {
 } from "@lelantos-org/sdk";
 
 import { RELAYER } from "./accounts";
-import { ASSET, MASP_ABI, TREE_DEPTH, withFee } from "./constants";
+import { ASSET, MASP_ABI, TIMEOUT, TREE_DEPTH, withFee } from "./constants";
 import { env } from "./env";
 import {
     type Erc20Helpers,
@@ -173,7 +173,7 @@ export async function waitForFmdHealth(): Promise<void> {
             const r = await fetch(env.fmdUrl + "/health").catch(() => null);
             return r?.ok ? true : null;
         },
-        { label: "fmd health", timeoutMs: 60_000 },
+        { label: "fmd health", timeoutMs: TIMEOUT.POLL_DEFAULT_MS },
     );
 }
 
@@ -185,6 +185,35 @@ export async function subscribe(fmd: FmdClient, wallet: TestWallet): Promise<num
         gamma: wallet.detectionKey.x.length,
     });
     return sub.id;
+}
+
+export interface ActorSpec {
+    nsk: bigint;
+    /// If true, register the actor's detection key with fmd. Subscription
+    /// id surfaces on the returned actor as `subscriptionId`.
+    subscribe?: boolean;
+}
+
+export interface Actor extends TestWallet {
+    nsk: bigint;
+    subscriptionId?: number;
+}
+
+/// Build a named map of test actors from `{ name: spec }`. Hides the
+/// `makeWallet(h.P, h.J, NSK)` + optional `subscribe` boilerplate every
+/// test file repeats.
+export async function setupActors<K extends string>(
+    h: Harness,
+    specs: Record<K, ActorSpec>,
+): Promise<Record<K, Actor>> {
+    const out = {} as Record<K, Actor>;
+    for (const name of Object.keys(specs) as K[]) {
+        const spec = specs[name];
+        const w = makeWallet(h.P, h.J, spec.nsk);
+        const subscriptionId = spec.subscribe ? await subscribe(h.fmd, w) : undefined;
+        out[name] = { ...w, nsk: spec.nsk, subscriptionId };
+    }
+    return out;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -254,23 +283,40 @@ export async function submitIntentDirect(args: {
     return { txHash: tx.hash as string, intentId };
 }
 
+/// Parse every log in `receipt` whose topic[0] matches `eventName` on
+/// `contract`. Foreign logs (different ABI) are silently dropped — the
+/// receipt always carries logs from peripheral contracts hit during the
+/// tx, and the parser would throw on them.
+export function parseContractLogs(
+    receipt: { logs: readonly ethers.Log[] } | null,
+    contract: ethers.Contract,
+    eventName: string,
+): ethers.LogDescription[] {
+    if (!receipt) return [];
+    const out: ethers.LogDescription[] = [];
+    for (const log of receipt.logs) {
+        try {
+            const parsed = contract.interface.parseLog({
+                topics: [...log.topics],
+                data: log.data,
+            });
+            if (parsed?.name === eventName) out.push(parsed);
+        } catch {
+            // log not from this ABI; skip
+        }
+    }
+    return out;
+}
+
 function extractIntentId(
     receipt: ethers.ContractTransactionReceipt | null,
     masp: ethers.Contract,
 ): bigint {
-    if (!receipt) throw new Error("submitIntent: no receipt");
-    for (const log of receipt.logs) {
-        try {
-            const parsed = masp.interface.parseLog({
-                topics: [...log.topics],
-                data: log.data,
-            });
-            if (parsed?.name === "IntentEscrowed") return parsed.args[0] as bigint;
-        } catch {
-            // log not from MASP; skip
-        }
+    const escrowed = parseContractLogs(receipt, masp, "IntentEscrowed");
+    if (escrowed.length === 0) {
+        throw new Error("submitIntent: IntentEscrowed log not found");
     }
-    throw new Error("submitIntent: IntentEscrowed log not found");
+    return escrowed[0].args[0] as bigint;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -408,8 +454,77 @@ export async function submitWithdrawNative(
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// MASP receipt log helpers
+// ──────────────────────────────────────────────────────────────────────
+
+/// Poll provider logs for an `IntentFlushed`-bearing tx that covers
+/// every id in `wantedIds`. Returns the tx hash. Used by the batch-
+/// flush test to detect when the relayer's flush cron has drained all N
+/// pending intents into a single batch tx.
+export async function waitForBatchFlushTx(args: {
+    provider: ethers.JsonRpcProvider;
+    masp: ethers.Contract;
+    maspAddress: string;
+    fromBlock: number;
+    wantedIds: bigint[];
+    timeoutMs?: number;
+}): Promise<string> {
+    const { provider, masp, maspAddress, fromBlock, wantedIds } = args;
+    const flushTopic = masp.interface.getEvent("IntentFlushed")!.topicHash;
+    const wanted = new Set(wantedIds.map((id) => id.toString()));
+    return pollUntil(async () => {
+        const logs = await provider.getLogs({
+            address: maspAddress,
+            topics: [flushTopic],
+            fromBlock,
+            toBlock: "latest",
+        });
+        const byTx = new Map<string, Set<string>>();
+        for (const log of logs) {
+            const id = BigInt(log.topics[1]).toString();
+            if (!byTx.has(log.transactionHash)) byTx.set(log.transactionHash, new Set());
+            byTx.get(log.transactionHash)!.add(id);
+        }
+        for (const [tx, ids] of byTx) {
+            if ([...wanted].every((id) => ids.has(id))) return tx;
+        }
+        return null;
+    }, { label: "batch flush tx", timeoutMs: args.timeoutMs ?? TIMEOUT.BATCH_FLUSH_MS });
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // FMD match decryption + verification
 // ──────────────────────────────────────────────────────────────────────
+
+/// Try to decrypt an fmd match with the wallet's ivk and recompute the
+/// cm. Returns null when decryption fails (decoy hit the detection key
+/// but is not for this wallet) OR when the recomputed cm does not bind
+/// to the indexer's commitment (impostor note that happens to decrypt).
+function tryDecryptMatch(
+    P: Poseidon,
+    J: Jubjub,
+    w: TestWallet,
+    m: FmdMatchOut,
+): { payload: NotePayload; cm: Field } | null {
+    const { body } = stripClueBitsPrefix(hexToBytes(m.ciphertextHex));
+    const epkPacked = J.packPoint([BigInt(m.ephPubX), BigInt(m.ephPubY)]);
+    const plain = decryptNote({
+        J,
+        ivk: w.keys.ivk,
+        note: { epk: epkPacked, ciphertext: body },
+    });
+    if (plain === null) return null;
+    const payload = decodeNotePayload(plain);
+    const cm = buildNoteCommitment(P, {
+        asset: payload.asset,
+        value: payload.value,
+        pk: w.keys.pk,
+        rho: payload.rho,
+        rcm: payload.rcm,
+    });
+    if ("0x" + m.commitmentHex.toLowerCase() !== cmToHex(cm)) return null;
+    return { payload, cm };
+}
 
 /// Decrypt an fmd match with the wallet's ivk, recompute the cm from the
 /// recovered payload, and assert it matches the indexer's commitment —
@@ -421,26 +536,9 @@ export async function decryptAndVerifyMatch(
     w: TestWallet,
     m: FmdMatchOut,
 ): Promise<{ payload: NotePayload; cm: Field }> {
-    const { body } = stripClueBitsPrefix(hexToBytes(m.ciphertextHex));
-    const epkPacked = J.packPoint([BigInt(m.ephPubX), BigInt(m.ephPubY)]);
-    const plain = decryptNote({
-        J,
-        ivk: w.keys.ivk,
-        note: { epk: epkPacked, ciphertext: body },
-    });
-    if (plain === null) throw new Error("decryptNote returned null");
-    const payload = decodeNotePayload(plain);
-    const cm = buildNoteCommitment(P, {
-        asset: payload.asset,
-        value: payload.value,
-        pk: w.keys.pk,
-        rho: payload.rho,
-        rcm: payload.rcm,
-    });
-    if ("0x" + m.commitmentHex.toLowerCase() !== cmToHex(cm)) {
-        throw new Error("recomputed cm does not match indexer commitment");
-    }
-    return { payload, cm };
+    const r = tryDecryptMatch(P, J, w, m);
+    if (r === null) throw new Error("decryptAndVerifyMatch: decoy or cm mismatch");
+    return r;
 }
 
 /// Filter `listMatches` output down to genuine recipient notes. FMD γ=5
@@ -455,25 +553,7 @@ export function filterRealMatches(
     w: TestWallet,
     matches: FmdMatchOut[],
 ): FmdMatchOut[] {
-    return matches.filter((m) => {
-        const { body } = stripClueBitsPrefix(hexToBytes(m.ciphertextHex));
-        const epkPacked = J.packPoint([BigInt(m.ephPubX), BigInt(m.ephPubY)]);
-        const plain = decryptNote({
-            J,
-            ivk: w.keys.ivk,
-            note: { epk: epkPacked, ciphertext: body },
-        });
-        if (plain === null) return false;
-        const payload = decodeNotePayload(plain);
-        const cm = buildNoteCommitment(P, {
-            asset: payload.asset,
-            value: payload.value,
-            pk: w.keys.pk,
-            rho: payload.rho,
-            rcm: payload.rcm,
-        });
-        return "0x" + m.commitmentHex.toLowerCase() === cmToHex(cm);
-    });
+    return matches.filter((m) => tryDecryptMatch(P, J, w, m) !== null);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -494,9 +574,10 @@ export {
     rngForOutput,
     setupErc20,
     setupWeth,
+    snapshotBalances,
     type TestWallet,
     waitForCm,
     waitForAdvance,
 } from "./scenario";
-export { ASSET, FEE_BPS, baseAmt, feeFor, scaleFor, withFee, MASP_ABI } from "./constants";
+export { ASSET, FEE_BPS, baseAmt, feeFor, scaleFor, withFee, MASP_ABI, TIMEOUT } from "./constants";
 export { cmToHex, counter, nfToHex, pollUntil } from "./utils";

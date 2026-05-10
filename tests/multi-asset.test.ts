@@ -23,6 +23,7 @@ import {
     setupErc20,
     setupHarness,
     setupWeth,
+    snapshotBalances,
     type SpendableCachedNote,
     submitWithdraw,
     type TestWallet,
@@ -37,28 +38,25 @@ const DEPOSIT_MDAI = 20n;
 const WITHDRAW_WETH = 5n;
 const WITHDRAW_MDAI = 10n;
 
-interface Snapshot { payer: bigint; masp: bigint; recipient: bigint }
-
 describe("multi-asset deposit + withdraw", () => {
     let h: Harness;
     let alice: TestWallet;
     let weth: Erc20Helpers;
     let mdai: Erc20Helpers;
-    let baselineWeth: Snapshot;
-    let baselineMdai: Snapshot;
+    let baselineWeth: Record<string, bigint>;
+    let baselineMdai: Record<string, bigint>;
     /// Per-asset spendable note. cm is re-derived inside `inputSlotFor`.
     const spendable = new Map<bigint, SpendableCachedNote>();
 
     const aliceRng = counter(0xaa_a1ce_0001n);
     const auxRng = newAuxRng(0xaa_add_0001n);
 
-    async function snapshot(t: Erc20Helpers): Promise<Snapshot> {
-        return {
-            payer: await t.balanceOf(env.payerAddress),
-            masp: await t.balanceOf(env.maspAddress),
-            recipient: await t.balanceOf(env.recipientAddress),
-        };
-    }
+    const TRACKED = {
+        payer: env.payerAddress,
+        masp: env.maspAddress,
+        recipient: env.recipientAddress,
+    };
+    const snapshot = (t: Erc20Helpers) => snapshotBalances(t, TRACKED);
 
     beforeAll(async () => {
         h = await setupHarness();

@@ -24,7 +24,7 @@ import {
     type SpendingKey,
 } from "@lelantos-org/sdk";
 
-import { ASSET, FMD_GAMMA, MOCK_ERC20_ABI } from "./constants";
+import { ASSET, FMD_GAMMA, MOCK_ERC20_ABI, TIMEOUT } from "./constants";
 import { env } from "./env";
 import { cmToHex, pollUntil } from "./utils";
 
@@ -156,7 +156,7 @@ export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> 
     return pollUntil(async () => {
         const rows = await fmd.listNotes({ limit: 1000 });
         return rows.find((n) => "0x" + n.commitmentHex.toLowerCase() === cmHex);
-    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 60_000 });
+    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
 }
 
 export interface TreeAdvance {
@@ -174,7 +174,26 @@ export async function waitForAdvance(startIndex: number): Promise<TreeAdvance> {
         if (!r.ok) return null;
         const rows = (await r.json()) as TreeAdvance[];
         return rows.find((t) => t.startIndex === startIndex);
-    }, { label: `tree_advance(${startIndex})`, timeoutMs: 60_000 });
+    }, { label: `tree_advance(${startIndex})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Balance snapshots
+// ──────────────────────────────────────────────────────────────────────
+
+/// Read `token.balanceOf` for every address in `addrs`. Output keyed by
+/// the address strings the caller passed in — callers use stable env
+/// names (payerAddress, maspAddress, recipientAddress) so per-test
+/// snapshots line up with their assertions.
+export async function snapshotBalances(
+    token: Erc20Helpers,
+    addrs: Record<string, string>,
+): Promise<Record<string, bigint>> {
+    const out: Record<string, bigint> = {};
+    for (const [name, addr] of Object.entries(addrs)) {
+        out[name] = await token.balanceOf(addr);
+    }
+    return out;
 }
 
 // ──────────────────────────────────────────────────────────────────────

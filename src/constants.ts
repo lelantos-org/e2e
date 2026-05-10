@@ -73,6 +73,17 @@ export const BASE_RUST_ENV = {
 /// connect should finish well under 60s; bump if your runner is slow.
 export const DEFAULT_STARTUP_MS = 60_000;
 
+/// Polling/wait budgets shared across the test suite. Keep in one place
+/// so tightening or loosening CI tolerance stays a single edit.
+export const TIMEOUT = {
+    /// Default `pollUntil` budget (waitForCm, waitForAdvance, fmd health).
+    POLL_DEFAULT_MS: 60_000,
+    /// Batch-flush relayer cron tick + tx mining; needs more than POLL_DEFAULT.
+    BATCH_FLUSH_MS: 90_000,
+    /// Whole-test cap for batch-flush vitest case (relayer cron + N submits).
+    BATCH_FLUSH_TEST_MS: 180_000,
+} as const;
+
 // ──────────────────────────────────────────────────────────────────────
 // Test-domain knobs
 // ──────────────────────────────────────────────────────────────────────

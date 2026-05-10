@@ -22,11 +22,13 @@ import {
     makeWallet,
     MASP_ABI,
     newAuxRng,
-    pollUntil,
+    parseContractLogs,
     rngForOutput,
     setupHarness,
     submitIntentDirect,
     type TestWallet,
+    TIMEOUT,
+    waitForBatchFlushTx,
     waitForCm,
     withFee,
 } from "../src/harness";
@@ -84,58 +86,32 @@ describe("batch flush", () => {
         }
 
         const masp = new ethers.Contract(env.maspAddress, MASP_ABI, h.provider);
-        const flushTopic = masp.interface.getEvent("IntentFlushed")!.topicHash;
-        const rootTopic = masp.interface.getEvent("RootAdvanced")!.topicHash;
-
-        // Poll for a tx hash whose IntentFlushed logs cover all N intent ids.
-        const wantedIds = new Set(submitted.map((s) => s.intentId.toString()));
-        const flushTx = await pollUntil(async () => {
-            const logs = await h.provider.getLogs({
-                address: env.maspAddress,
-                topics: [flushTopic],
-                fromBlock: startBlock,
-                toBlock: "latest",
-            });
-            const byTx = new Map<string, Set<string>>();
-            for (const log of logs) {
-                const id = BigInt(log.topics[1]).toString();
-                if (!byTx.has(log.transactionHash)) byTx.set(log.transactionHash, new Set());
-                byTx.get(log.transactionHash)!.add(id);
-            }
-            for (const [tx, ids] of byTx) {
-                if ([...wantedIds].every((id) => ids.has(id))) return tx;
-            }
-            return null;
-        }, { label: "batch flush tx", timeoutMs: 90_000 });
+        const wantedIds = submitted.map((s) => s.intentId);
+        const flushTx = await waitForBatchFlushTx({
+            provider: h.provider,
+            masp,
+            maspAddress: env.maspAddress,
+            fromBlock: startBlock,
+            wantedIds,
+        });
 
         const receipt = await h.provider.getTransactionReceipt(flushTx);
         if (!receipt) throw new Error("flush receipt missing");
 
-        // Exactly N IntentFlushed events in the single batch tx.
-        const flushed = receipt.logs.filter(
-            (l) => l.address.toLowerCase() === env.maspAddress.toLowerCase()
-                && l.topics[0] === flushTopic,
-        );
+        // Exactly N IntentFlushed events in the single batch tx, each id once.
+        const flushed = parseContractLogs(receipt, masp, "IntentFlushed");
         expect(flushed.length).toBe(N);
-        // Each id appears exactly once.
-        const idsInTx = new Set(flushed.map((l) => BigInt(l.topics[1]).toString()));
-        expect(idsInTx).toEqual(wantedIds);
+        const idsInTx = new Set(flushed.map((l) => (l.args[0] as bigint).toString()));
+        expect(idsInTx).toEqual(new Set(wantedIds.map((id) => id.toString())));
 
         // Single RootAdvanced with inserted = 2*N (each intent contributes 2 cms).
-        const rootLogs = receipt.logs.filter(
-            (l) => l.address.toLowerCase() === env.maspAddress.toLowerCase()
-                && l.topics[0] === rootTopic,
-        );
+        const rootLogs = parseContractLogs(receipt, masp, "RootAdvanced");
         expect(rootLogs.length).toBe(1);
-        const root = masp.interface.parseLog({
-            topics: [...rootLogs[0].topics],
-            data: rootLogs[0].data,
-        });
-        expect(root!.args.inserted).toBe(BigInt(2 * N));
+        expect(rootLogs[0].args.inserted).toBe(BigInt(2 * N));
 
         // All N real-output cms eventually indexed by fmd.
         for (const s of submitted) {
             await waitForCm(h.fmd, s.cm0);
         }
-    }, 180_000);
+    }, TIMEOUT.BATCH_FLUSH_TEST_MS);
 });

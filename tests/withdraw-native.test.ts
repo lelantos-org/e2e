@@ -20,6 +20,7 @@ import {
     noteFor,
     setupHarness,
     setupWeth,
+    snapshotBalances,
     type SpendableCachedNote,
     submitWithdrawNative,
     type TestWallet,
@@ -54,11 +55,18 @@ describe("withdraw native ETH (WETH unwrap)", () => {
     const rng = counter(0xee_a1ce_0001n);
     const auxRng = newAuxRng(0xee_add_0001n);
 
+    const WETH_ADDRS = {
+        payer: env.payerAddress,
+        masp: env.maspAddress,
+        recipient: env.recipientAddress,
+    };
+
     async function snap(): Promise<Snapshot> {
+        const w = await snapshotBalances(weth, WETH_ADDRS);
         return {
-            payerWeth: await weth.balanceOf(env.payerAddress),
-            maspWeth: await weth.balanceOf(env.maspAddress),
-            recipientWeth: await weth.balanceOf(env.recipientAddress),
+            payerWeth: w.payer,
+            maspWeth: w.masp,
+            recipientWeth: w.recipient,
             recipientEth: await h.provider.getBalance(env.recipientAddress),
         };
     }

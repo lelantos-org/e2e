@@ -9,21 +9,21 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env";
 import {
+    type Actor,
     buildNullifierFromNsk,
     counter,
     deposit,
     type Harness,
     inputSlotFor,
-    makeWallet,
     newAuxRng,
     nfToHex,
     type Note,
     noteFor,
     rngForOutput,
+    setupActors,
     setupHarness,
     type SpendableCachedNote,
     submitTransfer,
-    type TestWallet,
     withFee,
 } from "../src/harness";
 import { buildTransfer } from "@lelantos-org/sdk";
@@ -35,8 +35,8 @@ const DEPOSIT_AMT = 50n;
 
 describe("double-spend rejection", () => {
     let h: Harness;
-    let alice: TestWallet;
-    let bob: TestWallet;
+    let alice: Actor;
+    let bob: Actor;
     let aliceNote: SpendableCachedNote;
 
     const aliceRng = counter(0xdd_a1ce_0001n);
@@ -47,8 +47,10 @@ describe("double-spend rejection", () => {
         h = await setupHarness({
             fund: [{ kind: "erc20", token: env.token2, amount: withFee(DEPOSIT_AMT) }],
         });
-        alice = makeWallet(h.P, h.J, ALICE_NSK);
-        bob = makeWallet(h.P, h.J, BOB_NSK);
+        ({ alice, bob } = await setupActors(h, {
+            alice: { nsk: ALICE_NSK },
+            bob: { nsk: BOB_NSK },
+        }));
     });
 
     it("deposit funds alice's spendable note", async () => {

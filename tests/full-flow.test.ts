@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env";
 import {
+    type Actor,
     buildNoteCommitment,
     buildNullifierFromNsk,
     cmToHex,
@@ -18,21 +19,19 @@ import {
     feeFor,
     filterRealMatches,
     type Harness,
-    makeWallet,
     newAuxRng,
     nfToHex,
     type Note,
     noteFor,
     pollUntil,
     rngForOutput,
+    setupActors,
     setupErc20,
     setupHarness,
     type SpendableCachedNote,
     submitIntentDirect,
     submitTransfer,
     submitWithdraw,
-    subscribe,
-    type TestWallet,
     waitForAdvance,
     withFee,
 } from "../src/harness";
@@ -45,11 +44,10 @@ const BOB_NSK = 0xff_b0b_b0b00n;
 describe("masp e2e flow", () => {
     let h: Harness;
     let erc20: Erc20Helpers;
-    let alice: TestWallet;
-    let bob: TestWallet;
+    let alice: Actor;
+    let bob: Actor;
     /// Alice's spendable notes. cm is re-derived inside `inputSlotFor`.
     let aliceNotes: SpendableCachedNote[] = [];
-    let bobSubscriptionId: number;
 
     const aliceRng = counter(0xff_a1ce_0001n);
     const bobRng = counter(0xff_b0b_0001n);
@@ -58,9 +56,10 @@ describe("masp e2e flow", () => {
     beforeAll(async () => {
         h = await setupHarness();
         erc20 = await setupErc20(h.payer, env.token2, env.permit2Address, withFee(1000n));
-        alice = makeWallet(h.P, h.J, ALICE_NSK);
-        bob = makeWallet(h.P, h.J, BOB_NSK);
-        bobSubscriptionId = await subscribe(h.fmd, bob);
+        ({ alice, bob } = await setupActors(h, {
+            alice: { nsk: ALICE_NSK },
+            bob: { nsk: BOB_NSK, subscribe: true },
+        }));
     });
 
     it("deposit: 100 units, alice gets a note", async () => {
@@ -218,7 +217,7 @@ describe("masp e2e flow", () => {
         // via decryption before asserting cardinality.
         const real = await pollUntil(
             async () => {
-                const ms = await h.fmd.listMatches({ subscription: bobSubscriptionId, limit: 50 });
+                const ms = await h.fmd.listMatches({ subscription: bob.subscriptionId!, limit: 50 });
                 const r = filterRealMatches(h.P, h.J, bob, ms);
                 return r.length >= 1 ? r : null;
             },
