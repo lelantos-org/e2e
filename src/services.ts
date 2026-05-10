@@ -21,8 +21,10 @@ import {
     CONFIG_DIR,
     DB_URL,
     DEFAULT_STARTUP_MS,
+    FEE_BPS,
     PORT,
 } from "./constants";
+import type { SwapAddresses } from "./stack";
 
 // ──────────────────────────────────────────────────────────────────────
 // Spec shape
@@ -101,10 +103,12 @@ export interface BackendServices {
     fmdWeb: ServiceSpec;
     explorerWeb: ServiceSpec;
     relayer: ServiceSpec;
+    /// Present iff the deploy phase produced swap addresses.
+    metaquoter?: ServiceSpec;
 }
 
-export function backendSpecs(masp: string): BackendServices {
-    return {
+export function backendSpecs(masp: string, swap?: SwapAddresses): BackendServices {
+    const services: BackendServices = {
         ingester: {
             image: "lelantos/ingester:dev",
             alias: "ingester",
@@ -156,6 +160,9 @@ export function backendSpecs(masp: string): BackendServices {
                 [`RELAYER_CHAIN_${CHAIN_ID}_POOL_ADDRESS`]: masp,
                 [`RELAYER_CHAIN_${CHAIN_ID}_RPC_URL`]: ANVIL_RPC_INTERNAL,
                 [`RELAYER_CHAIN_${CHAIN_ID}_SIGNER_KEY`]: RELAYER.privateKey,
+                ...(swap
+                    ? { [`RELAYER_CHAIN_${CHAIN_ID}_SWAP_WRAPPER_ADDRESS`]: swap.wrapper }
+                    : {}),
                 RUST_LOG: "info",
             },
             mounts: [{ configFile: "relayer.toml", target: "/etc/relayer.toml" }],
@@ -165,6 +172,26 @@ export function backendSpecs(masp: string): BackendServices {
             startupMs: 240_000,
         },
     };
+
+    if (swap) {
+        services.metaquoter = {
+            image: "lelantos/metaquoter:dev",
+            alias: "metaquoter",
+            env: {
+                RUST_LOG: "info",
+                METAQUOTER_CONFIG: "/etc/metaquoter.toml",
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_RPC_URL`]: ANVIL_RPC_INTERNAL,
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV3_QUOTER`]: swap.univ3Quoter,
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV3_ADAPTER`]: swap.univ3Adapter,
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_MASP_FEE_BPS`]: FEE_BPS.toString(),
+            },
+            mounts: [{ configFile: "metaquoter.toml", target: "/etc/metaquoter.toml" }],
+            port: PORT.METAQUOTER,
+            wait: Wait.forListeningPorts(),
+        };
+    }
+
+    return services;
 }
 
 // ──────────────────────────────────────────────────────────────────────

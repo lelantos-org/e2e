@@ -167,6 +167,13 @@ jobs:
           path: /tmp/docker-images/relayer.tar
           key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ env.CIRCUITS_RELEASE }}-${{ steps.shas.outputs.rl_dockerfile }}
 
+      - name: Cache image — metaquoter
+        id: cache-metaquoter
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/metaquoter.tar
+          key: img-metaquoter-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
       - name: Build / load images
         env:
           HIT_INGESTER: ${{ steps.cache-ingester.outputs.cache-hit }}
@@ -175,6 +182,7 @@ jobs:
           HIT_FMD_WEBSERVER: ${{ steps.cache-fmd-webserver.outputs.cache-hit }}
           HIT_EXPLORER_WEBSERVER: ${{ steps.cache-explorer-webserver.outputs.cache-hit }}
           HIT_RELAYER: ${{ steps.cache-relayer.outputs.cache-hit }}
+          HIT_METAQUOTER: ${{ steps.cache-metaquoter.outputs.cache-hit }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/docker-images
@@ -209,6 +217,7 @@ jobs:
           load_or_build explorer-indexer   "$HIT_EXPLORER_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build fmd-webserver      "$HIT_FMD_WEBSERVER"      vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build explorer-webserver "$HIT_EXPLORER_WEBSERVER" vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build metaquoter         "$HIT_METAQUOTER"         vendor/backend/Dockerfile vendor/backend & pids+=($!)
           fail=0
           for pid in "${pids[@]}"; do wait "$pid" || fail=1; done
           [[ $fail -eq 0 ]]
@@ -245,6 +254,13 @@ jobs:
         with:
           path: /tmp/docker-images/fmd-webserver.tar
           key: ${{ steps.cache-fmd-webserver.outputs.cache-primary-key }}
+
+      - name: Save image cache — metaquoter
+        if: steps.cache-metaquoter.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/metaquoter.tar
+          key: ${{ steps.cache-metaquoter.outputs.cache-primary-key }}
 
       - name: Save image cache — explorer-webserver
         if: steps.cache-explorer-webserver.outputs.cache-hit != 'true'

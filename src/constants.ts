@@ -53,6 +53,7 @@ export const PORT = {
     FMD_WEB: 3001,
     EXPLORER_WEB: 3002,
     RELAYER: 3003,
+    METAQUOTER: 8081,
 } as const;
 
 // ──────────────────────────────────────────────────────────────────────
@@ -149,4 +150,22 @@ export const MOCK_ERC20_ABI = [
     "function mint(address to, uint256 amount) public",
     "function approve(address spender, uint256 amount) public returns (bool)",
     "function balanceOf(address) view returns (uint256)",
+] as const;
+
+/// Test stubs deployed alongside the swap stack when SWAP_ENABLED=true.
+export const MOCK_QUOTER_V2_ABI = [
+    "function set(address tokenIn, address tokenOut, uint24 fee, uint256 amountOut, uint256 gasEstimate)",
+] as const;
+
+export const MOCK_SWAP_ROUTER_ABI = [
+    "function setNextOut(uint256 v)",
+    "function nextOut() view returns (uint256)",
+] as const;
+
+/// Subset of `SwapWrapper` methods the e2e tests call from the host. Full
+/// `SwapArgs` calldata layout lives in `swap-harness.ts` next to the
+/// encoder — no need to duplicate the schema here.
+export const SWAP_WRAPPER_ABI = [
+    "function adapterAllowed(address) view returns (bool)",
+    "event SwapExecuted(address indexed adapter, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 actualOut, uint256 dust, uint256 intentId)",
 ] as const;

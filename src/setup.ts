@@ -28,6 +28,7 @@ export default async function setup() {
     const addrs = await stack.deploy();
     log("MASP =", addrs.masp);
     log("tokens =", addrs.tokens);
+    log("swap =", addrs.swap);
 
     log("starting backend services…");
     const urls = await stack.upBackend(addrs);
@@ -86,4 +87,11 @@ function publishEnv(e: StackEnv): void {
     process.env.PAYER_KEY = e.payerKey;
     process.env.RECIPIENT_ADDRESS = e.recipientAddress;
     process.env.PERMIT2_ADDRESS = e.permit2;
+    if (e.metaquoter) process.env.METAQUOTER_URL = e.metaquoter;
+    if (e.swap) {
+        process.env.UNIV3_QUOTER_ADDRESS = e.swap.univ3Quoter;
+        process.env.UNIV3_ADAPTER_ADDRESS = e.swap.univ3Adapter;
+        process.env.MOCK_SWAP_ROUTER_ADDRESS = e.swap.mockSwapRouter;
+        process.env.SWAP_WRAPPER_ADDRESS = e.swap.wrapper;
+    }
 }

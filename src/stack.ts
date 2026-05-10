@@ -13,7 +13,7 @@ import {
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts";
 import { CHAIN_ID, CONTRACTS_DIR, FEE_BPS } from "./constants";
-import { preDeployPermit2 } from "./permit2";
+import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2";
 import { ANVIL, backendSpecs, POSTGRES, runService } from "./services";
 
 const execFileAsync = promisify(execFile);
@@ -31,6 +31,15 @@ export interface Addresses {
     weth?: string;
     /// Uniswap Permit2 deployment used by MASP for deposit pulls.
     permit2: string;
+    /// Populated only when `Stack.deploy({ withSwap: true })` is requested.
+    swap?: SwapAddresses;
+}
+
+export interface SwapAddresses {
+    univ3Quoter: string;
+    univ3Adapter: string;
+    mockSwapRouter: string;
+    wrapper: string;
 }
 
 export interface Urls {
@@ -38,6 +47,9 @@ export interface Urls {
     relayer: string;
     fmd: string;
     explorer: string;
+    /// Populated only when the swap stack is deployed (and the metaquoter
+    /// container started).
+    metaquoter?: string;
 }
 
 export interface StackEnv extends Urls {
@@ -48,7 +60,9 @@ export interface StackEnv extends Urls {
     payerKey: string;
     recipientAddress: string;
     permit2: string;
+    swap?: SwapAddresses;
 }
+
 
 // ──────────────────────────────────────────────────────────────────────
 // Stack
@@ -78,10 +92,22 @@ export class Stack {
         return { rpc: this.rpcUrl() };
     }
 
-    /// Phase 2 — host-side forge deploy. Parses DeployTest.s.sol's
-    /// KEY=0xADDR stdout into a typed `Addresses`.
+    /// Phase 2 — host-side forge deploy. Always deploys the swap stack
+    /// (MockQuoterV2 + MockSwapRouter02 + UniV3Adapter + SwapWrapper)
+    /// alongside MASP. Parses DeployTest.s.sol's KEY=0xADDR stdout into a
+    /// typed `Addresses`.
     async deploy(): Promise<Addresses> {
         const rpcUrl = this.rpcUrl();
+        const env: Record<string, string> = {
+            ...process.env as Record<string, string>,
+            MASP_FEE_BPS: FEE_BPS.toString(),
+            SWAP_ENABLED: "true",
+            // `preDeployPermit2` (run in `up()`) puts canonical Permit2
+            // bytecode at this address. Tell DeployTest about it so it
+            // skips the `vm.getCode` deploy fallback.
+            PERMIT2: CANONICAL_PERMIT2_ADDRESS,
+        };
+
         const { stdout } = await execFileAsync(
             "forge",
             [
@@ -94,7 +120,7 @@ export class Stack {
             {
                 cwd: CONTRACTS_DIR,
                 maxBuffer: 64 * 1024 * 1024,
-                env: { ...process.env, MASP_FEE_BPS: FEE_BPS.toString() },
+                env,
             },
         );
 
@@ -107,26 +133,30 @@ export class Stack {
     /// once the schema is in place.
     async upBackend(addrs: Addresses): Promise<Urls> {
         if (!this.network) throw new Error("upBackend: call up() first");
-        const specs = backendSpecs(addrs.masp);
+        const specs = backendSpecs(addrs.masp, addrs.swap);
 
         const ingester = await runService(specs.ingester, this.network);
         this.backends.push(ingester);
 
-        const [fmdIndexer, explorerIndexer, fmdWeb, explorerWeb, relayer] =
-            await Promise.all([
-                runService(specs.fmdIndexer, this.network),
-                runService(specs.explorerIndexer, this.network),
-                runService(specs.fmdWeb, this.network),
-                runService(specs.explorerWeb, this.network),
-                runService(specs.relayer, this.network),
-            ]);
-        this.backends.push(fmdIndexer, explorerIndexer, fmdWeb, explorerWeb, relayer);
+        const parallel: Promise<StartedTestContainer>[] = [
+            runService(specs.fmdIndexer, this.network),
+            runService(specs.explorerIndexer, this.network),
+            runService(specs.fmdWeb, this.network),
+            runService(specs.explorerWeb, this.network),
+            runService(specs.relayer, this.network),
+        ];
+        if (specs.metaquoter) parallel.push(runService(specs.metaquoter, this.network));
+
+        const started = await Promise.all(parallel);
+        const [fmdIndexer, explorerIndexer, fmdWeb, explorerWeb, relayer, metaquoter] = started;
+        this.backends.push(...started);
 
         return {
             rpc: this.rpcUrl(),
             fmd: hostUrl(fmdWeb, specs.fmdWeb.port!),
             explorer: hostUrl(explorerWeb, specs.explorerWeb.port!),
             relayer: hostUrl(relayer, specs.relayer.port!),
+            metaquoter: metaquoter ? hostUrl(metaquoter, specs.metaquoter!.port!) : undefined,
         };
     }
 
@@ -141,6 +171,7 @@ export class Stack {
             payerKey: PAYER.privateKey,
             recipientAddress: RECIPIENT.address,
             permit2: this.addresses.permit2,
+            swap: this.addresses.swap,
         };
     }
 
@@ -174,7 +205,8 @@ function hostUrl(c: StartedTestContainer, internalPort: number): string {
 
 function parseDeployOutput(stdout: string): Addresses {
     const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-    const re = /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WETH|PERMIT2)=(0x[0-9a-fA-F]{40})/g;
+    const re =
+        /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WETH|PERMIT2|UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
     const found = new Map<string, string>();
     for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
 
@@ -190,6 +222,19 @@ function parseDeployOutput(stdout: string): Addresses {
         if (m) tokens[Number(m[1])] = v;
     }
 
+    let swap: SwapAddresses | undefined;
+    const swapKeys = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"];
+    if (swapKeys.every((k) => found.has(k))) {
+        swap = {
+            univ3Quoter: found.get("UNIV3_QUOTER")!,
+            univ3Adapter: found.get("UNIV3_ADAPTER")!,
+            mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
+            wrapper: found.get("SWAP_WRAPPER")!,
+        };
+    } else if (swapKeys.some((k) => found.has(k))) {
+        throw new Error(`deploy: partial swap addresses in forge output:\n${stripped}`);
+    }
+
     return {
         verifier: found.get("VERIFIER")!,
         treeUpdateVerifier: found.get("TREE_UPDATE_BATCH_VERIFIER")!,
@@ -197,5 +242,6 @@ function parseDeployOutput(stdout: string): Addresses {
         tokens,
         weth: found.get("WETH"),
         permit2: found.get("PERMIT2")!,
+        swap,
     };
 }
