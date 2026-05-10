@@ -144,13 +144,18 @@ export async function setupWeth(
 // Indexer / explorer polling
 // ──────────────────────────────────────────────────────────────────────
 
-/// Wait until fmd-webserver reports the note for `cm` indexed.
+/// Wait until fmd-webserver reports the note for `cm` indexed. The
+/// indexer chain (anvil → ingester → fmd-indexer → fmd-webserver) can
+/// pile up several seconds of lag late in the suite when many test
+/// files have already pushed traffic through the same containers, so
+/// the timeout is tuned for the worst observed CI run, not happy-path
+/// latency (typically <2 s).
 export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> {
     const cmHex = cmToHex(cm);
     return pollUntil(async () => {
         const rows = await fmd.listNotes({ limit: 50 });
         return rows.find((n) => "0x" + n.commitmentHex.toLowerCase() === cmHex);
-    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 60_000 });
+    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 180_000 });
 }
 
 export interface TreeAdvance {
