@@ -26,7 +26,7 @@ import {
     withFee,
 } from "../src/harness";
 
-const ALICE_NSK = 0xe7e7n;
+const ALICE_NSK = 0xee_a1ce_a11c0n;
 const ASSET_WETH = 1n;
 const DEPOSIT_WETH = 20n;
 const WITHDRAW_WETH = 8n;
@@ -51,8 +51,8 @@ describe("withdraw native ETH (WETH unwrap)", () => {
     let baseline: Snapshot;
     let spendable: SpendableCachedNote;
 
-    const rng = counter(0xe7e7e7n);
-    const auxRng = newAuxRng();
+    const rng = counter(0xee_a1ce_0001n);
+    const auxRng = newAuxRng(0xee_add_0001n);
 
     async function snap(): Promise<Snapshot> {
         return {

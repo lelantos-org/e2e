@@ -31,15 +31,15 @@ import {
     withFee,
 } from "../src/harness";
 
-const ALICE_NSK = 33n;
+const ALICE_NSK = 0xbf_a1ce_a11c0n;
 const N = 3;
 const DEPOSIT_AMT = 10n;
 
 describe("batch flush", () => {
     let h: Harness;
     let alice: TestWallet;
-    const aliceRng = counter(0xba7c4n);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0xbf_a1ce_0001n);
+    const auxRng = newAuxRng(0xbf_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness({

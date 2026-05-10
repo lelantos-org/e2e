@@ -37,8 +37,10 @@ import {
     withFee,
 } from "../src/harness";
 
-const ALICE_NSK = 11n;
-const BOB_NSK = 22n;
+// File-unique seeds; cross-file collisions on shared anvil cause cm/nf
+// dupes when wallets touch the same `(asset, value)` slots.
+const ALICE_NSK = 0xff_a1ce_a11c0n;
+const BOB_NSK = 0xff_b0b_b0b00n;
 
 describe("masp e2e flow", () => {
     let h: Harness;
@@ -49,9 +51,9 @@ describe("masp e2e flow", () => {
     let aliceNotes: SpendableCachedNote[] = [];
     let bobSubscriptionId: number;
 
-    const aliceRng = counter(0xa1n);
-    const bobRng = counter(0xb0bn);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0xff_a1ce_0001n);
+    const bobRng = counter(0xff_b0b_0001n);
+    const auxRng = newAuxRng(0xff_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness();

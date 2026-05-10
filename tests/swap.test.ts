@@ -37,7 +37,7 @@ import {
     type SwapHarness,
 } from "../src/swap-harness";
 
-const ALICE_NSK = 0xa11ce11n;
+const ALICE_NSK = 0x55_a1ce_a11c0n;
 const ASSET_OUT = 3n;        // mWBTC, scale = 1
 const FEE_TIER = 500;
 
@@ -49,8 +49,8 @@ describe("masp swap e2e", () => {
     let mWbtc: ethers.Contract;
     let aliceNotes: SpendableCachedNote[] = [];
 
-    const aliceRng = counter(0xa11cen);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0x55_a1ce_0001n);
+    const auxRng = newAuxRng(0x55_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness();

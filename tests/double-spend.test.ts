@@ -28,8 +28,9 @@ import {
 } from "../src/harness";
 import { buildTransfer } from "@lelantos-org/sdk";
 
-const ALICE_NSK = 11n;
-const BOB_NSK = 22n;
+// File-unique seeds; see full-flow.test.ts for the rationale.
+const ALICE_NSK = 0xdd_a1ce_a11c0n;
+const BOB_NSK = 0xdd_b0b_b0b00n;
 const DEPOSIT_AMT = 50n;
 
 describe("double-spend rejection", () => {
@@ -38,9 +39,9 @@ describe("double-spend rejection", () => {
     let bob: TestWallet;
     let aliceNote: SpendableCachedNote;
 
-    const aliceRng = counter(0xdeadbeefn);
-    const bobRng = counter(0xb0bbn);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0xdd_a1ce_0001n);
+    const bobRng = counter(0xdd_b0b_0001n);
+    const auxRng = newAuxRng(0xdd_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness({

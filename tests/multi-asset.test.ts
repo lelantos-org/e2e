@@ -29,7 +29,7 @@ import {
     withFee,
 } from "../src/harness";
 
-const ALICE_NSK = 11n;
+const ALICE_NSK = 0xaa_a1ce_a11c0n;
 const ASSET_WETH = 1n;
 const ASSET_MDAI = 2n;
 const DEPOSIT_WETH = 10n;
@@ -49,8 +49,8 @@ describe("multi-asset deposit + withdraw", () => {
     /// Per-asset spendable note. cm is re-derived inside `inputSlotFor`.
     const spendable = new Map<bigint, SpendableCachedNote>();
 
-    const aliceRng = counter(0xa1cen);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0xaa_a1ce_0001n);
+    const auxRng = newAuxRng(0xaa_add_0001n);
 
     async function snapshot(t: Erc20Helpers): Promise<Snapshot> {
         return {

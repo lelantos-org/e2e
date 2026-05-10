@@ -35,8 +35,8 @@ import {
 // `fmd_webserver.subscriptions` enforces UNIQUE(detection_key) and the
 // detection key is deterministic from nsk — sharing nsks across files
 // makes the second `createSubscription` collide with the first.
-const ALICE_NSK = 110n;
-const BOB_NSK = 220n;
+const ALICE_NSK = 0xcc_a1ce_a11c0n;
+const BOB_NSK = 0xcc_b0b_b0b00n;
 const DEPOSIT_1 = 100n;
 const DEPOSIT_2 = 50n;
 const TO_BOB_1 = 30n;
@@ -50,9 +50,9 @@ describe("cold-client resync", () => {
     let bobSubscriptionId: number;
     let aliceSpendable: SpendableCachedNote;
 
-    const aliceRng = counter(0xc01dn);
-    const bobRng = counter(0xb0bbn);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0xcc_a1ce_0001n);
+    const bobRng = counter(0xcc_b0b_0001n);
+    const auxRng = newAuxRng(0xcc_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness({

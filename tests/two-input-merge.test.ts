@@ -26,8 +26,8 @@ import {
     withFee,
 } from "../src/harness";
 
-const ALICE_NSK = 11n;
-const BOB_NSK = 22n;
+const ALICE_NSK = 0x22_a1ce_a11c0n;
+const BOB_NSK = 0x22_b0b_b0b00n;
 const DEPOSIT_A = 30n;
 const DEPOSIT_B = 70n;
 const TOTAL = DEPOSIT_A + DEPOSIT_B;
@@ -39,9 +39,9 @@ describe("two-input merge transfer", () => {
     let noteA: SpendableCachedNote;
     let noteB: SpendableCachedNote;
 
-    const aliceRng = counter(0xa11cen);
-    const bobRng = counter(0xb0bn);
-    const auxRng = newAuxRng();
+    const aliceRng = counter(0x22_a1ce_0001n);
+    const bobRng = counter(0x22_b0b_0001n);
+    const auxRng = newAuxRng(0x22_add_0001n);
 
     beforeAll(async () => {
         h = await setupHarness({

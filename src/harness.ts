@@ -60,10 +60,13 @@ export const PROVER_PATHS = {
     zkeyPath: resolve(env.circuitsBuild, "2x2_final.zkey"),
 };
 
-/// Shared aux randomness seed. Each test calls `newAuxRng()` to get its
-/// own independent stream so parallel files don't entangle.
+/// Default aux-randomness seed. Test files SHOULD pass a file-unique seed
+/// (e.g. `newAuxRng(SEEDS.deposit.aux)`) — sharing the same seed across
+/// files makes their derived FMD clues + ECDH ephemeral keys collide
+/// when they touch overlapping wallets/values, which on a shared anvil
+/// can produce identical output commitments and break later submissions.
 export const AUX_RNG_SEED = 0xfacecafen;
-export const newAuxRng = () => counter(AUX_RNG_SEED);
+export const newAuxRng = (seed: bigint = AUX_RNG_SEED) => counter(seed);
 
 // ──────────────────────────────────────────────────────────────────────
 // Harness
@@ -105,6 +108,16 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
     const P = await Poseidon.build();
     const J = await Jubjub.build();
     const provider = new ethers.JsonRpcProvider(env.rpcUrl);
+    // PAYER is a deterministic EOA shared across every test file (its
+    // private key is hardcoded in `accounts.ts`). Vitest reuses one
+    // anvil for the whole run, so by file N the chain has already
+    // accepted txs from setup phases 1..N-1. CI hit `NONCE_EXPIRED` on
+    // the first `approve(Permit2)` because anvil's mempool still
+    // carried unmined inflight txs from the previous file when this
+    // one read `getTransactionCount("pending")`. Force-mine 2 blocks
+    // up front so the mempool is empty before any new ethers call
+    // queries the nonce.
+    await flushMempool(provider);
     const payer = new ethers.Wallet(env.payerKey, provider);
     const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
     const relayer = new RelayerClient(env.relayerUrl);
@@ -138,6 +151,20 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
         }),
         currentRoot: async () => (await fmd.fetchTreeState()).root,
     };
+}
+
+/// Mine pending blocks on the dev anvil so the mempool is empty before
+/// the caller queries `getTransactionCount`. Without this, ethers can
+/// see inflight txs from the previous test file's setup and hand the
+/// chain a nonce that gets stamped before the prior block lands —
+/// raising NONCE_EXPIRED on the next send. Quietly no-ops on chains
+/// that don't expose `anvil_mine`.
+async function flushMempool(provider: ethers.JsonRpcProvider): Promise<void> {
+    try {
+        await provider.send("anvil_mine", ["0x2"]);
+    } catch {
+        // not anvil — nothing to do
+    }
 }
 
 export async function waitForFmdHealth(): Promise<void> {
