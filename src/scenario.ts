@@ -145,17 +145,18 @@ export async function setupWeth(
 // ──────────────────────────────────────────────────────────────────────
 
 /// Wait until fmd-webserver reports the note for `cm` indexed. The
-/// indexer chain (anvil → ingester → fmd-indexer → fmd-webserver) can
-/// pile up several seconds of lag late in the suite when many test
-/// files have already pushed traffic through the same containers, so
-/// the timeout is tuned for the worst observed CI run, not happy-path
-/// latency (typically <2 s).
+/// listNotes endpoint returns rows ordered by ascending id with a
+/// hard limit (server-side cap is 1000) — late in the suite there are
+/// hundreds of notes already in the table, so a small `limit` would
+/// keep returning the same first page and never surface the freshly
+/// indexed cm. Pull the largest page available so any cm produced in
+/// this run shows up.
 export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> {
     const cmHex = cmToHex(cm);
     return pollUntil(async () => {
-        const rows = await fmd.listNotes({ limit: 50 });
+        const rows = await fmd.listNotes({ limit: 1000 });
         return rows.find((n) => "0x" + n.commitmentHex.toLowerCase() === cmHex);
-    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 180_000 });
+    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: 60_000 });
 }
 
 export interface TreeAdvance {
