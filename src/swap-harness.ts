@@ -72,7 +72,7 @@ export async function quoteSwap(
 /// Tests use this to drive metaquoter responses without changing on-chain
 /// pool liquidity.
 export async function setMockQuote(
-    payer: ethers.Wallet,
+    payer: ethers.NonceManager,
     s: SwapHarness,
     args: { tokenIn: string; tokenOut: string; fee: number; amountOut: bigint; gasEstimate: bigint },
 ): Promise<void> {
@@ -84,7 +84,7 @@ export async function setMockQuote(
 /// `exactInputSingle` / `exactInput` call. Tests use this to drive
 /// slippage scenarios.
 export async function setMockNextOut(
-    payer: ethers.Wallet,
+    payer: ethers.NonceManager,
     s: SwapHarness,
     nextOut: bigint,
 ): Promise<void> {

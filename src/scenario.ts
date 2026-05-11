@@ -102,13 +102,13 @@ export interface Erc20Helpers {
 /// allowance. Permit2 is the spender now (MASP pulls funds via
 /// `permitWitnessTransferFrom` against the depositor's witness sig).
 export async function setupErc20(
-    payer: ethers.Wallet,
+    payer: ethers.NonceManager,
     tokenAddr: string,
     spender: string,
     initialMint: bigint,
 ): Promise<Erc20Helpers> {
     const c = new ethers.Contract(tokenAddr, MOCK_ERC20_ABI, payer);
-    await (await c.mint(payer.address, initialMint)).wait();
+    await (await c.mint(await payer.getAddress(), initialMint)).wait();
     await (await c.approve(spender, ethers.MaxUint256)).wait();
     return {
         contract: c,
@@ -126,7 +126,7 @@ const MOCK_WETH9_ABI = [
 /// `deposit()`, then approve the MASP. Same `Erc20Helpers` shape so the
 /// rest of the test code doesn't care which token it is talking to.
 export async function setupWeth(
-    payer: ethers.Wallet,
+    payer: ethers.NonceManager,
     wethAddr: string,
     spender: string,
     amount: bigint,

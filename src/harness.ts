@@ -76,7 +76,7 @@ export interface Harness {
     P: Poseidon;
     J: Jubjub;
     provider: ethers.JsonRpcProvider;
-    payer: ethers.Wallet;
+    payer: ethers.NonceManager;
     masp: ethers.Contract;
     relayer: RelayerClient;
     fmd: FmdClient;
@@ -118,7 +118,10 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
     // up front so the mempool is empty before any new ethers call
     // queries the nonce.
     await flushMempool(provider);
-    const payer = new ethers.Wallet(env.payerKey, provider);
+    // NonceManager tracks nonce locally so back-to-back sends (mint→approve
+    // in setupErc20, etc.) don't race anvil's `pending` counter, which can
+    // briefly lag after `.wait()` returns and hand ethers a just-mined nonce.
+    const payer = new ethers.NonceManager(new ethers.Wallet(env.payerKey, provider));
     const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
     const relayer = new RelayerClient(env.relayerUrl);
     const fmd = new FmdClient(env.fmdUrl, env.chainId);
@@ -237,7 +240,7 @@ export interface SubmitIntentResult {
 /// `MASP.submitIntent` directly via ethers. Bypasses the relayer; the
 /// relayer still auto-flushes via `IntentEscrowed` event scrape.
 export async function submitIntentDirect(args: {
-    payer: ethers.Wallet;
+    payer: ethers.NonceManager;
     intent: DepositIntent;
     aux: [AuxOutput, AuxOutput];
     tokenAddr: string;
