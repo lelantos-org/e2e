@@ -6,8 +6,6 @@
 // Tests pull their state from `Harness` instead of redeclaring it in
 // every `beforeAll`.
 
-import { resolve } from "node:path";
-
 import { ethers } from "ethers";
 
 import {
@@ -56,8 +54,8 @@ import { cmToHex, counter, hexToBytes, pollUntil } from "./utils";
 // ──────────────────────────────────────────────────────────────────────
 
 export const PROVER_PATHS = {
-    wasmPath: resolve(env.circuitsBuild, "2x2_js", "2x2.wasm"),
-    zkeyPath: resolve(env.circuitsBuild, "2x2_final.zkey"),
+    wasmPath: require.resolve("@lelantos-org/circuits/2x2/2x2.wasm"),
+    zkeyPath: require.resolve("@lelantos-org/circuits/2x2/2x2_final.zkey"),
 };
 
 /// Default aux-randomness seed. Test files SHOULD pass a file-unique seed

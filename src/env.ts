@@ -2,8 +2,6 @@
 // globalSetup) which boots the testcontainer stack and writes URLs +
 // addresses + keys into process.env before any test file is imported.
 
-import { CIRCUITS_BUILD_DIR } from "./constants";
-
 function req(name: string): string {
     const v = process.env[name];
     if (!v) throw new Error(`missing env var: ${name}`);
@@ -40,7 +38,6 @@ export const env = {
     payerKey: req("PAYER_KEY"),
     recipientAddress: req("RECIPIENT_ADDRESS"),
     permit2Address: req("PERMIT2_ADDRESS"),
-    circuitsBuild: process.env.CIRCUITS_BUILD ?? CIRCUITS_BUILD_DIR,
 
     // Optional — populated only when SWAP_ENABLED=true at deploy.
     metaquoterUrl: () => reqSwap(() => opt("METAQUOTER_URL"), "METAQUOTER_URL"),

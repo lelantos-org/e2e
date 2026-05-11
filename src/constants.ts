@@ -4,7 +4,7 @@
 //
 // Splits:
 //   - chain      : CHAIN_ID
-//   - paths      : E2E_DIR, CONFIG_DIR, CONTRACTS_DIR, CIRCUITS_BUILD_DIR
+//   - paths      : E2E_DIR, CONFIG_DIR, CONTRACTS_DIR
 //   - network    : DB_URL, ANVIL_RPC_INTERNAL, container ports
 //   - rust env   : BASE_RUST_ENV (DATABASE_URL + RUST_LOG)
 //   - runtime    : DEFAULT_STARTUP_MS
@@ -31,7 +31,6 @@ export const E2E_DIR = resolve(__dirname, "..");
 export const CONFIG_DIR = resolve(E2E_DIR, "config");
 export const VENDOR_DIR = resolve(E2E_DIR, "vendor");
 export const CONTRACTS_DIR = resolve(VENDOR_DIR, "contracts");
-export const CIRCUITS_BUILD_DIR = resolve(VENDOR_DIR, "circuits", "build");
 
 // ──────────────────────────────────────────────────────────────────────
 // Container network
