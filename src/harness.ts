@@ -139,9 +139,19 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
             // Expected (local-compiled at vendor/contracts/out/Verifier.sol/Groth16Verifier.json):
             // sha256 of object hex string = 1cb9a1e3136c3e24c4664986dca53a277ec2f00786c16d7dfde1e08f6a137482
             // Mismatch -> deployed bytecode differs from local compile -> forge cache or pin issue.
-            // search for IC0x bytes (`1f88c7c188a7782e92413789c974c79ab74f0e68af1224b5ce788a9a5bd617a6`)
-            const IC0X_HEX = "1f88c7c188a7782e92413789c974c79ab74f0e68af1224b5ce788a9a5bd617a6";
-            console.log("[debug-spend] verifier.code contains IC0x bytes:", code.toLowerCase().includes(IC0X_HEX));
+            const lc = code.toLowerCase();
+            const f32 = (n: bigint) => n.toString(16).padStart(64, "0");
+            // local-compiled vkey constants @ f3d2b70 Verifier.sol
+            const expected = {
+                IC0x: f32(14263368172075200997753642088860918482291183355957233934278632887091109173158n),
+                IC1x: f32(10976710834955089685134368783082153777476916388282931860404597867840580035049n),
+                IC2x: f32(17383114075001147589175041779103716052214171641891923838232970479420160404890n),
+                deltax1: f32(1580518940785376183646474878131087005383050737588091175385259650134194694546n),
+                deltax2: f32(4125812559176177166408888123752362522589114682440794200013225243389285607428n),
+            };
+            for (const [k, v] of Object.entries(expected)) {
+                console.log(`[debug-spend] verifier.code contains ${k}(${v.slice(0, 12)}..):`, lc.includes(v));
+            }
         }
     } catch (e) {
         console.log("[debug-spend] verifier direct THREW:", (e as Error).message);
