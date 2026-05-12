@@ -459,7 +459,14 @@ export async function submitTransfer(
         outputRecipients: [recipients[0].recipient, recipients[1].recipient],
         outputRandomness: [rngForOutput(auxRng), rngForOutput(auxRng)],
     });
-    console.log("[debug-spend] payload=", JSON.stringify(built.payload, (_k, v) => typeof v === "bigint" ? v.toString() : v));
+    {
+        const j = (x: unknown) => JSON.stringify(x, (_k, v) => typeof v === "bigint" ? v.toString() : v);
+        const p = built.payload as any;
+        console.log("[debug-spend] proof2x2=", j(p.proof2x2));
+        console.log("[debug-spend] pubInputs=", j(p.pubInputs));
+        console.log("[debug-spend] aux=", j(p.aux));
+        console.log("[debug-spend] meta=", j({ chainId: p.chainId, kind: p.kind }));
+    }
     await h.relayer.submitTransact(built.payload);
     await waitForCm(h.fmd, built.cm[0]);
     await waitForCm(h.fmd, built.cm[1]);
