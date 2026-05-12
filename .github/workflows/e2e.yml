@@ -124,7 +124,30 @@ jobs:
           echo "tree_update_batch_final.zkey = $tree_sha"
           echo "2x2_final.zkey               = $pair_sha"
 
-      # Guard: committed verifier sols must match the vkeys baked into the
+      # Guard 1: r1cs + wasm hashes must match what the committed verifier
+      # sols were generated against. Catches circuit-revision drift (release
+      # ships an older circom build whose witness layout no longer matches
+      # MASP.sol's compress() -- vkey may still line up but on-chain
+      # pairing fails). Hashes are pinned in contracts/src/circuit-artifacts.sha256.
+      - name: Verify circuit r1cs/wasm hashes match committed pins
+        run: |
+          set -euo pipefail
+          # Build a checkfile with paths relative to vendor/circuits/build.
+          # sha256sum -c needs the path layout to match the file.
+          (
+            cd vendor/circuits/build
+            # Rewrite "<sha>  tree_update_batch.wasm" -> "<sha>  tree_update_batch_js/tree_update_batch.wasm"
+            # and similar for 2x2.wasm, since wasm lives under <name>_js/.
+            sed \
+              -e 's| tree_update_batch.wasm$| tree_update_batch_js/tree_update_batch.wasm|' \
+              -e 's| 2x2.wasm$| 2x2_js/2x2.wasm|' \
+              ../../contracts/src/circuit-artifacts.sha256 \
+              | grep -vE '^\s*(#|$)' \
+              | sha256sum -c -
+          )
+          echo "circuit r1cs/wasm match committed pins"
+
+      # Guard 2: committed verifier sols must match the vkeys baked into the
       # downloaded zkeys. Catches release-asset re-upload drift before we
       # waste ~30 min building images that would revert TreeUpdateRejected().
       - name: Verify vkeys match committed verifier sols
