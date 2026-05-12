@@ -152,6 +152,12 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
             for (const [k, v] of Object.entries(expected)) {
                 console.log(`[debug-spend] verifier.code contains ${k}(${v.slice(0, 12)}..):`, lc.includes(v));
             }
+            // Dump deployed bytecode in chunks (small enough to dodge vitest truncation).
+            const codeNo0x = code.replace(/^0x/, "");
+            const chunkSz = 512;
+            for (let i = 0; i < codeNo0x.length; i += chunkSz) {
+                console.log(`[debug-spend] verifier.code[${i}..${i + chunkSz}]=`, codeNo0x.slice(i, i + chunkSz));
+            }
         }
     } catch (e) {
         console.log("[debug-spend] verifier direct THREW:", (e as Error).message);
