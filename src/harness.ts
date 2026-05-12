@@ -461,10 +461,38 @@ export async function submitTransfer(
     });
     {
         const j = (x: unknown) => JSON.stringify(x, (_k, v) => typeof v === "bigint" ? v.toString() : v);
+        const hx = (u: unknown): string => {
+            const a = u as { length: number;[k: string]: number } | number[];
+            const out: string[] = [];
+            for (let i = 0; i < (a as { length: number }).length; i++) {
+                out.push(((a as Record<number, number>)[i] ?? 0).toString(16).padStart(2, "0"));
+            }
+            return "0x" + out.join("");
+        };
         const p = built.payload as any;
         console.log("[debug-spend] proof2x2=", j(p.proof2x2));
-        console.log("[debug-spend] pubInputs=", j(p.pubInputs));
-        console.log("[debug-spend] aux=", j(p.aux));
+        const pi = p.pubInputs;
+        console.log("[debug-spend] pi.head=", j({
+            merkleRoot: pi.merkleRoot,
+            publicAssetId: pi.publicAssetId,
+            publicIn: pi.publicIn,
+            publicOut: pi.publicOut,
+            chainId: pi.chainId,
+            recipient: pi.recipient,
+            payer: pi.payer,
+            relayer: pi.relayer,
+        }));
+        console.log("[debug-spend] pi.nullifier=", j(pi.nullifier));
+        console.log("[debug-spend] pi.outCm=", j(pi.outCm));
+        console.log("[debug-spend] pi.inCv=", j(pi.inCv));
+        console.log("[debug-spend] pi.outCv=", j(pi.outCv));
+        console.log("[debug-spend] pi.outCvDep=", j(pi.outCvDep));
+        for (let i = 0; i < p.aux.length; i++) {
+            const a = p.aux[i];
+            console.log(`[debug-spend] aux[${i}].clueR=`, j(a.clueR));
+            console.log(`[debug-spend] aux[${i}].ephPub=`, j(a.ephPub));
+            console.log(`[debug-spend] aux[${i}].ciphertext=`, hx(a.ciphertext));
+        }
         console.log("[debug-spend] meta=", j({ chainId: p.chainId, kind: p.kind }));
     }
     await h.relayer.submitTransact(built.payload);
