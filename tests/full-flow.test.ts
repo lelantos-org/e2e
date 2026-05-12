@@ -181,8 +181,8 @@ describe("masp e2e flow", () => {
             ...h.bundleCommon(),
             publicIn: principal,
             recipient: alice.recipient,
-            output0: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), aux: rngForOutput(auxRng) },
-            output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng() },
+            output0: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(), aux: rngForOutput(auxRng) },
+            output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng() },
         });
         // maxTotal = principal-in-base omits the fee; Permit2 reverts when
         // MASP requests `inAmt + fee`. Margin is exactly the fee leg.

@@ -176,6 +176,17 @@ export class Stack {
     }
 
     async down(): Promise<void> {
+        const fs = await import("node:fs");
+        const { execSync } = await import("node:child_process");
+        for (const c of this.backends) {
+            try {
+                const id = (c as any).getId?.() ?? "";
+                const name = ((c as any).getName?.() ?? "unknown").replace(/^\//, "");
+                if (!id) continue;
+                const out = execSync(`docker logs ${id} 2>&1 || true`, { maxBuffer: 64 * 1024 * 1024 });
+                fs.writeFileSync(`/tmp/e2e-${name}.log`, out);
+            } catch {}
+        }
         const stops: Promise<unknown>[] = [];
         for (const c of [...this.backends, ...this.infra]) {
             stops.push(c.stop().catch(() => {}));

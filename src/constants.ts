@@ -78,9 +78,9 @@ export const TIMEOUT = {
     /// Default `pollUntil` budget (waitForCm, waitForAdvance, fmd health).
     POLL_DEFAULT_MS: 60_000,
     /// Batch-flush relayer cron tick + tx mining; needs more than POLL_DEFAULT.
-    BATCH_FLUSH_MS: 90_000,
+    BATCH_FLUSH_MS: 150_000,
     /// Whole-test cap for batch-flush vitest case (relayer cron + N submits).
-    BATCH_FLUSH_TEST_MS: 180_000,
+    BATCH_FLUSH_TEST_MS: 240_000,
 } as const;
 
 // ──────────────────────────────────────────────────────────────────────

@@ -71,9 +71,10 @@ describe("batch flush", () => {
                     rho: aliceRng(),
                     rcm: aliceRng(),
                     rcv: aliceRng(),
+                    rcvDep: aliceRng(),
                     aux: rngForOutput(auxRng),
                 },
-                output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng() },
+                output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng() },
             });
             const r = await submitIntentDirect({
                 payer: h.payer,

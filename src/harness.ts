@@ -222,10 +222,10 @@ export async function setupActors<K extends string>(
 // ──────────────────────────────────────────────────────────────────────
 
 const MASP_INTENT_ABI = [
-    "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
+    "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm,uint256[2] cvDep0,uint256[2] cvDep1,uint256 rcvTotal) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
     "function cancelIntent(uint256 id)",
     "function cancelDelay() view returns (uint32)",
-    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, bytes32 cm0, bytes32 cm1, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
+    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, bytes32 cm0, bytes32 cm1, uint256 cvDep0X, uint256 cvDep0Y, uint256 cvDep1X, uint256 cvDep1Y, uint256 rcvTotal, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
     "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
 ];
 
@@ -261,6 +261,65 @@ export async function submitIntentDirect(args: {
     });
 
     const masp = new ethers.Contract(env.maspAddress, MASP_INTENT_ABI, payer);
+    // DEBUG: dump intent + sig before sending so we can decode any revert.
+    console.log("[debug] intent=", JSON.stringify({
+        chainId: intent.chainId.toString(),
+        publicAssetId: intent.publicAssetId.toString(),
+        publicIn: intent.publicIn.toString(),
+        payer: intent.payer,
+        recipient: intent.recipient,
+        outCm: intent.outCm,
+        cvDep0: intent.cvDep0.map((x) => x.toString()),
+        cvDep1: intent.cvDep1.map((x) => x.toString()),
+        rcvTotal: intent.rcvTotal.toString(),
+    }));
+    console.log("[debug] piHash=", piHash);
+    console.log("[debug] permit2Address=", env.permit2Address, "masp=", env.maspAddress, "token=", tokenAddr);
+    try {
+        await masp.submitIntent.staticCall(
+            [
+                intent.chainId,
+                intent.publicAssetId,
+                intent.publicIn,
+                intent.payer,
+                intent.recipient,
+                intent.outCm,
+                intent.cvDep0,
+                intent.cvDep1,
+                intent.rcvTotal,
+            ],
+            [sig.nonce, sig.deadline, sig.maxTotal, sig.signature],
+            aux.map((a) => [a.clueRx, a.clueRy, a.ephPubX, a.ephPubY, ethers.hexlify(a.ciphertext)]),
+        );
+    } catch (e: any) {
+        console.log("[debug] staticCall revert: data=", e.data, " info=", JSON.stringify(e.info, null, 2), " err=", JSON.stringify(e?.error ?? null), " msg=", e?.shortMessage);
+        // Also probe via raw eth_call to get raw revert hex.
+        try {
+            const iface = new ethers.Interface([
+                "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm,uint256[2] cvDep0,uint256[2] cvDep1,uint256 rcvTotal) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
+            ]);
+            const data = iface.encodeFunctionData("submitIntent", [
+                [
+                    intent.chainId,
+                    intent.publicAssetId,
+                    intent.publicIn,
+                    intent.payer,
+                    intent.recipient,
+                    intent.outCm,
+                    intent.cvDep0,
+                    intent.cvDep1,
+                    intent.rcvTotal,
+                ],
+                [sig.nonce, sig.deadline, sig.maxTotal, sig.signature],
+                aux.map((a) => [a.clueRx, a.clueRy, a.ephPubX, a.ephPubY, ethers.hexlify(a.ciphertext)]),
+            ]);
+            const rpc = (payer as any).provider;
+            const callRes = await rpc.send("eth_call", [{ from: await payer.getAddress(), to: env.maspAddress, data }, "latest"]);
+            console.log("[debug] raw eth_call result=", callRes);
+        } catch (e2: any) {
+            console.log("[debug] raw eth_call err data=", e2?.data, "info=", JSON.stringify(e2?.info, null, 2));
+        }
+    }
     const tx = await masp.submitIntent(
         [
             intent.chainId,
@@ -269,6 +328,9 @@ export async function submitIntentDirect(args: {
             intent.payer,
             intent.recipient,
             intent.outCm,
+            intent.cvDep0,
+            intent.cvDep1,
+            intent.rcvTotal,
         ],
         [sig.nonce, sig.deadline, sig.maxTotal, sig.signature],
         aux.map((a) => [
@@ -351,8 +413,8 @@ export async function deposit(opts: DepositOpts): Promise<SpendableCachedNote> {
         ...h.bundleCommon(asset),
         publicIn: amount,
         recipient: wallet.recipient,
-        output0: { rho: rng(), rcm: rng(), rcv: rng(), aux: rngForOutput(auxRng) },
-        output1Pad: { rho: rng(), rcm: rng(), rcv: rng() },
+        output0: { rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(), aux: rngForOutput(auxRng) },
+        output1Pad: { rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng() },
     });
 
     await submitIntentDirect({

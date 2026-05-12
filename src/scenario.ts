@@ -80,6 +80,7 @@ export function noteFor(
         rho: rng(),
         rcm: rng(),
         rcv: rng(),
+        rcvDep: rng(),
     };
 }
 

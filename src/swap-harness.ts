@@ -173,8 +173,8 @@ export async function executeSwap(
         recipientAddress: env.recipientAddress,
         publicIn: bNote.value,
         recipient: recipient.recipient,
-        output0: { rho: bNote.rho, rcm: bNote.rcm, rcv: bNote.rcv, aux: rngForOutput(auxRng) },
-        output1Pad: { rho: auxRng(), rcm: auxRng(), rcv: auxRng() },
+        output0: { rho: bNote.rho, rcm: bNote.rcm, rcv: bNote.rcv, rcvDep: bNote.rcvDep, aux: rngForOutput(auxRng) },
+        output1Pad: { rho: auxRng(), rcm: auxRng(), rcv: auxRng(), rcvDep: auxRng() },
     });
 
     // MASP.withdraw skims `feeBps` off the gross before transferring to

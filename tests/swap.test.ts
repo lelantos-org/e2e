@@ -122,6 +122,7 @@ describe("masp swap e2e", () => {
             rho: aliceRng(),
             rcm: aliceRng(),
             rcv: aliceRng(),
+            rcvDep: aliceRng(),
         };
 
         const { txHash, intentBundle } = await executeSwap({
@@ -171,7 +172,7 @@ describe("masp swap e2e", () => {
             asset: ASSET_OUT,
             value: quote.minOut,
             pk: alice.keys.pk,
-            rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(),
+            rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(),
         };
 
         await expect(
@@ -211,7 +212,7 @@ describe("masp swap e2e", () => {
             asset: ASSET_OUT,
             value: quote.minOut,
             pk: alice.keys.pk,
-            rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(),
+            rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(),
         };
 
         await expect(
