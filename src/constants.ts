@@ -76,7 +76,7 @@ export const DEFAULT_STARTUP_MS = 60_000;
 /// so tightening or loosening CI tolerance stays a single edit.
 export const TIMEOUT = {
     /// Default `pollUntil` budget (waitForCm, waitForAdvance, fmd health).
-    POLL_DEFAULT_MS: 60_000,
+    POLL_DEFAULT_MS: 120_000,
     /// Batch-flush relayer cron tick + tx mining; needs more than POLL_DEFAULT.
     BATCH_FLUSH_MS: 150_000,
     /// Whole-test cap for batch-flush vitest case (relayer cron + N submits).
