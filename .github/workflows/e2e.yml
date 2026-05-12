@@ -32,7 +32,7 @@ jobs:
     env:
       # Pinned circuits release. Bump in lockstep with verifier sols
       # committed to lelantos-org/contracts (vkey must match this zkey).
-      CIRCUITS_RELEASE: v0.1.2
+      CIRCUITS_RELEASE: v0.1.3
 
     steps:
       - name: Free disk space
