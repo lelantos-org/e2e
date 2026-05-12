@@ -58,6 +58,63 @@ export const PROVER_PATHS = {
     zkeyPath: require.resolve("@lelantos-org/circuits/2x2/2x2_final.zkey"),
 };
 
+async function debugSelfVerifySpend(built: { payload: unknown }): Promise<void> {
+    // Read NPM-installed vkey, compute (y, z) from SDK flatten + fiatShamirZ,
+    // and run snarkjs.verify against the SDK's own proof. If false here, the
+    // proof CI's snarkjs.fullProve produced does NOT verify against the vkey
+    // baked into the same NPM zkey -- which can only happen if snarkjs in CI
+    // is loading a different zkey than the one we resolved (path drift,
+    // truncated tarball, etc).
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    // @ts-expect-error - snarkjs has no types
+    const { groth16 } = await import("snarkjs");
+    const sc: any = await import("@lelantos-org/sdk/dist/snark-compression.js" as string);
+    const vkeyPath = path.resolve(path.dirname(PROVER_PATHS.zkeyPath), "verification_key.json");
+    const vkey = JSON.parse(fs.readFileSync(vkeyPath, "utf8"));
+    const p = (built.payload as any);
+    const pi = p.pubInputs;
+    const aux = p.aux;
+    const cb = (u: unknown): bigint => {
+        const a = u as Record<number, number>;
+        return BigInt(((a[0] ?? 0) << 8) | (a[1] ?? 0));
+    };
+    const flat = {
+        merkle_root: pi.merkleRoot,
+        nullifier: pi.nullifier,
+        out_cm: pi.outCm,
+        public_asset_id: pi.publicAssetId,
+        public_in: pi.publicIn,
+        public_out: pi.publicOut,
+        in_cv: pi.inCv.map((p: any) => [p[0].toString(), p[1].toString()]),
+        out_cv: pi.outCv.map((p: any) => [p[0].toString(), p[1].toString()]),
+        recipient_address: pi.recipient,
+        chain_id: pi.chainId,
+        payer_address: pi.payer,
+        relayer_address: pi.relayer,
+        out_cv_dep: pi.outCvDep.map((p: any) => [p[0].toString(), p[1].toString()]),
+        out_clue_Rx: aux.map((a: any) => a.clueR[0].toString()),
+        out_clue_Ry: aux.map((a: any) => a.clueR[1].toString()),
+        out_clue_bits: aux.map((a: any) => cb(a.ciphertext)),
+    };
+    const coeffs = sc.flatten(flat);
+    const z = sc.fiatShamirZ(coeffs);
+    const y = sc.hornerEval(coeffs, z);
+    console.log("[debug-spend] sdk_y=", y.toString());
+    console.log("[debug-spend] sdk_z=", z.toString());
+    const proof = {
+        pi_a: p.proof2x2.piA,
+        pi_b: p.proof2x2.piB,
+        pi_c: p.proof2x2.piC,
+        protocol: "groth16",
+        curve: "bn128",
+    };
+    const ok = await groth16.verify(vkey, [y.toString(), z.toString()], proof);
+    console.log("[debug-spend] snarkjs.verify(npm_vkey, [y,z], proof) =", ok);
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
 /// Default aux-randomness seed. Test files SHOULD pass a file-unique seed
 /// (e.g. `newAuxRng(SEEDS.deposit.aux)`) — sharing the same seed across
 /// files makes their derived FMD clues + ECDH ephemeral keys collide
@@ -459,42 +516,7 @@ export async function submitTransfer(
         outputRecipients: [recipients[0].recipient, recipients[1].recipient],
         outputRandomness: [rngForOutput(auxRng), rngForOutput(auxRng)],
     });
-    {
-        const j = (x: unknown) => JSON.stringify(x, (_k, v) => typeof v === "bigint" ? v.toString() : v);
-        const hx = (u: unknown): string => {
-            const a = u as { length: number;[k: string]: number } | number[];
-            const out: string[] = [];
-            for (let i = 0; i < (a as { length: number }).length; i++) {
-                out.push(((a as Record<number, number>)[i] ?? 0).toString(16).padStart(2, "0"));
-            }
-            return "0x" + out.join("");
-        };
-        const p = built.payload as any;
-        console.log("[debug-spend] proof2x2=", j(p.proof2x2));
-        const pi = p.pubInputs;
-        console.log("[debug-spend] pi.head=", j({
-            merkleRoot: pi.merkleRoot,
-            publicAssetId: pi.publicAssetId,
-            publicIn: pi.publicIn,
-            publicOut: pi.publicOut,
-            chainId: pi.chainId,
-            recipient: pi.recipient,
-            payer: pi.payer,
-            relayer: pi.relayer,
-        }));
-        console.log("[debug-spend] pi.nullifier=", j(pi.nullifier));
-        console.log("[debug-spend] pi.outCm=", j(pi.outCm));
-        console.log("[debug-spend] pi.inCv=", j(pi.inCv));
-        console.log("[debug-spend] pi.outCv=", j(pi.outCv));
-        console.log("[debug-spend] pi.outCvDep=", j(pi.outCvDep));
-        for (let i = 0; i < p.aux.length; i++) {
-            const a = p.aux[i];
-            console.log(`[debug-spend] aux[${i}].clueR=`, j(a.clueR));
-            console.log(`[debug-spend] aux[${i}].ephPub=`, j(a.ephPub));
-            console.log(`[debug-spend] aux[${i}].ciphertext=`, hx(a.ciphertext));
-        }
-        console.log("[debug-spend] meta=", j({ chainId: p.chainId, kind: p.kind }));
-    }
+    await debugSelfVerifySpend(built);
     await h.relayer.submitTransact(built.payload);
     await waitForCm(h.fmd, built.cm[0]);
     await waitForCm(h.fmd, built.cm[1]);
