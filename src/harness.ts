@@ -133,7 +133,15 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
             console.log("[debug-spend] Verifier.verifyProof(swapped b, [z, y]) =", ok4);
             // dump verifier bytecode size + first bytes
             const code: string = await h.provider.getCode(verifierAddr);
-            console.log("[debug-spend] verifier.code.length=", code.length, "head=", code.slice(0, 80));
+            const codeHashHex = ethers.keccak256(code);
+            console.log("[debug-spend] verifier.code.length=", code.length);
+            console.log("[debug-spend] verifier.code.keccak=", codeHashHex);
+            // Expected (local-compiled at vendor/contracts/out/Verifier.sol/Groth16Verifier.json):
+            // sha256 of object hex string = 1cb9a1e3136c3e24c4664986dca53a277ec2f00786c16d7dfde1e08f6a137482
+            // Mismatch -> deployed bytecode differs from local compile -> forge cache or pin issue.
+            // search for IC0x bytes (`1f88c7c188a7782e92413789c974c79ab74f0e68af1224b5ce788a9a5bd617a6`)
+            const IC0X_HEX = "1f88c7c188a7782e92413789c974c79ab74f0e68af1224b5ce788a9a5bd617a6";
+            console.log("[debug-spend] verifier.code contains IC0x bytes:", code.toLowerCase().includes(IC0X_HEX));
         }
     } catch (e) {
         console.log("[debug-spend] verifier direct THREW:", (e as Error).message);
