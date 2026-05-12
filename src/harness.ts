@@ -120,7 +120,20 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
                 onchainProof.c,
                 [sdkY, sdkZ],
             );
-            console.log("[debug-spend] Verifier.verifyProof(p, [y_sdk, z_sdk]) =", ok2);
+            console.log("[debug-spend] Verifier.verifyProof(swapped b, [y_sdk, z_sdk]) =", ok2);
+            // try without b swap
+            const bNoSwap = [
+                [pp.piB[0][0], pp.piB[0][1]],
+                [pp.piB[1][0], pp.piB[1][1]],
+            ];
+            const ok3 = await verifier.verifyProof(onchainProof.a, bNoSwap, onchainProof.c, [sdkY, sdkZ]);
+            console.log("[debug-spend] Verifier.verifyProof(raw b, [y_sdk, z_sdk]) =", ok3);
+            // also try [z, y]
+            const ok4 = await verifier.verifyProof(onchainProof.a, onchainProof.b, onchainProof.c, [sdkZ, sdkY]);
+            console.log("[debug-spend] Verifier.verifyProof(swapped b, [z, y]) =", ok4);
+            // dump verifier bytecode size + first bytes
+            const code: string = await h.provider.getCode(verifierAddr);
+            console.log("[debug-spend] verifier.code.length=", code.length, "head=", code.slice(0, 80));
         }
     } catch (e) {
         console.log("[debug-spend] verifier direct THREW:", (e as Error).message);
