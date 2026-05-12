@@ -32,7 +32,7 @@ jobs:
     env:
       # Pinned circuits release. Bump in lockstep with verifier sols
       # committed to lelantos-org/contracts (vkey must match this zkey).
-      CIRCUITS_RELEASE: v0.1.0
+      CIRCUITS_RELEASE: v0.1.1
 
     steps:
       - name: Free disk space
@@ -110,6 +110,40 @@ jobs:
           test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
           test -f vendor/circuits/build/tree_update_batch.r1cs
 
+      # Hash the downloaded zkeys. Used as the relayer image cache key so
+      # a re-uploaded release asset (same tag, new randomness) invalidates
+      # the cache. Tag-string keying caused vkey/zkey drift in CI.
+      - name: Compute zkey content hashes
+        id: zkey-hashes
+        run: |
+          set -euo pipefail
+          tree_sha=$(sha256sum vendor/circuits/build/tree_update_batch_final.zkey | cut -d' ' -f1)
+          pair_sha=$(sha256sum vendor/circuits/build/2x2_final.zkey | cut -d' ' -f1)
+          echo "tree_zkey_sha=$tree_sha" >> "$GITHUB_OUTPUT"
+          echo "pair_zkey_sha=$pair_sha" >> "$GITHUB_OUTPUT"
+          echo "tree_update_batch_final.zkey = $tree_sha"
+          echo "2x2_final.zkey               = $pair_sha"
+
+      # Guard: committed verifier sols must match the vkeys baked into the
+      # downloaded zkeys. Catches release-asset re-upload drift before we
+      # waste ~30 min building images that would revert TreeUpdateRejected().
+      - name: Verify vkeys match committed verifier sols
+        run: |
+          set -euo pipefail
+          npx --yes snarkjs@0.7.5 zkey export solidityverifier \
+            vendor/circuits/build/tree_update_batch_final.zkey /tmp/tubv.sol
+          npx --yes snarkjs@0.7.5 zkey export solidityverifier \
+            vendor/circuits/build/2x2_final.zkey /tmp/v.sol
+
+          # Strip the `contract <Name> {` line; everything else (alpha/beta/
+          # gamma/delta/IC constants) must match byte-for-byte.
+          norm() { grep -vE '^contract [A-Za-z0-9_]+ \{' "$1"; }
+          diff <(norm /tmp/tubv.sol) <(norm vendor/contracts/src/TreeUpdateBatchVerifier.sol) \
+            || { echo "::error::TreeUpdateBatchVerifier.sol vkey != tree_update_batch_final.zkey vkey"; exit 1; }
+          diff <(norm /tmp/v.sol) <(norm vendor/contracts/src/Verifier.sol) \
+            || { echo "::error::Verifier.sol vkey != 2x2_final.zkey vkey"; exit 1; }
+          echo "vkeys match committed verifier sols"
+
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
 
@@ -165,7 +199,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /tmp/docker-images/relayer.tar
-          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ env.CIRCUITS_RELEASE }}-${{ steps.shas.outputs.rl_dockerfile }}
+          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.zkey-hashes.outputs.tree_zkey_sha }}-${{ steps.zkey-hashes.outputs.pair_zkey_sha }}-${{ steps.shas.outputs.rl_dockerfile }}
 
       - name: Cache image — metaquoter
         id: cache-metaquoter
