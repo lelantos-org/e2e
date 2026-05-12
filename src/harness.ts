@@ -58,6 +58,56 @@ export const PROVER_PATHS = {
     zkeyPath: require.resolve("@lelantos-org/circuits/2x2/2x2_final.zkey"),
 };
 
+async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }): Promise<void> {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const p = (built.payload as any);
+    const pp = p.proof2x2;
+    const pi = p.pubInputs;
+    const aux = p.aux;
+    const onchainProof = {
+        a: [pp.piA[0], pp.piA[1]],
+        b: [[pp.piB[0][1], pp.piB[0][0]], [pp.piB[1][1], pp.piB[1][0]]],
+        c: [pp.piC[0], pp.piC[1]],
+    };
+    const onchainPi = {
+        merkleRoot: "0x" + BigInt(pi.merkleRoot).toString(16).padStart(64, "0"),
+        nullifier: pi.nullifier.map((n: string) => "0x" + BigInt(n).toString(16).padStart(64, "0")),
+        outCm: pi.outCm.map((n: string) => "0x" + BigInt(n).toString(16).padStart(64, "0")),
+        publicAssetId: pi.publicAssetId,
+        publicIn: pi.publicIn,
+        publicOut: pi.publicOut,
+        inCv: pi.inCv,
+        outCv: pi.outCv,
+        recipient: pi.recipient,
+        chainId: pi.chainId,
+        payer: pi.payer,
+        relayer: pi.relayer,
+        outCvDep: pi.outCvDep,
+    };
+    const hx = (u: unknown): string => {
+        const a = u as Record<number, number>;
+        let n = 0;
+        while ((a as any)[n] !== undefined) n++;
+        const out: string[] = [];
+        for (let i = 0; i < n; i++) out.push(((a[i] ?? 0)).toString(16).padStart(2, "0"));
+        return "0x" + out.join("");
+    };
+    const onchainAux = aux.map((a: any) => ({
+        clueRx: a.clueR[0],
+        clueRy: a.clueR[1],
+        ephPubX: a.ephPub[0],
+        ephPubY: a.ephPub[1],
+        ciphertext: hx(a.ciphertext),
+    }));
+    try {
+        const ok = await h.masp.verifyProof(onchainProof, onchainPi, onchainAux);
+        console.log("[debug-spend] masp.verifyProof(p, pi, aux) =", ok);
+    } catch (e) {
+        console.log("[debug-spend] masp.verifyProof THREW:", (e as Error).message);
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
 async function debugSelfVerifySpend(built: { payload: unknown }): Promise<void> {
     // Read NPM-installed vkey, compute (y, z) from SDK flatten + fiatShamirZ,
     // and run snarkjs.verify against the SDK's own proof. If false here, the
@@ -517,6 +567,7 @@ export async function submitTransfer(
         outputRandomness: [rngForOutput(auxRng), rngForOutput(auxRng)],
     });
     await debugSelfVerifySpend(built);
+    await debugOnChainVerifySpend(h, built);
     await h.relayer.submitTransact(built.payload);
     await waitForCm(h.fmd, built.cm[0]);
     await waitForCm(h.fmd, built.cm[1]);

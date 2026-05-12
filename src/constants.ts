@@ -152,6 +152,7 @@ export const MASP_ABI = [
     "function feeBps() view returns (uint16)",
     "function treasury() view returns (address)",
     "function accruedFee(address) view returns (uint256)",
+    "function verifyProof(tuple(uint256[2] a, uint256[2][2] b, uint256[2] c) p, tuple(bytes32 merkleRoot, bytes32[2] nullifier, bytes32[2] outCm, uint64 publicAssetId, uint64 publicIn, uint64 publicOut, uint256[2][2] inCv, uint256[2][2] outCv, address recipient, uint256 chainId, address payer, address relayer, uint256[2][2] outCvDep) pi, tuple(uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[2] aux) view returns (bool)",
     "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
     "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",
 ] as const;
