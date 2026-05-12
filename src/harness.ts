@@ -70,7 +70,7 @@ async function debugSelfVerifySpend(built: { payload: unknown }): Promise<void> 
     const path = await import("node:path");
     // @ts-expect-error - snarkjs has no types
     const { groth16 } = await import("snarkjs");
-    const sc: any = await import("@lelantos-org/sdk/dist/snark-compression.js" as string);
+    const sc: any = await import("@lelantos-org/sdk");
     const vkeyPath = path.resolve(path.dirname(PROVER_PATHS.zkeyPath), "verification_key.json");
     const vkey = JSON.parse(fs.readFileSync(vkeyPath, "utf8"));
     const p = (built.payload as any);
