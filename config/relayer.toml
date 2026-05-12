@@ -13,7 +13,7 @@ pool_address = "0x0000000000000000000000000000000000000000"
 # Overridden by RELAYER_CHAIN_31337_SIGNER_KEY.
 signer_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 receipt_timeout_s = 60
-flush_interval_s = 5
+flush_interval_s = 60
 
 [prover]
 wasm_path = "/app/tree_update_batch_js/tree_update_batch.wasm"
