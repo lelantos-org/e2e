@@ -459,7 +459,7 @@ export async function submitTransfer(
         outputRecipients: [recipients[0].recipient, recipients[1].recipient],
         outputRandomness: [rngForOutput(auxRng), rngForOutput(auxRng)],
     });
-    console.log("[debug-spend] payload=", JSON.stringify(built.payload));
+    console.log("[debug-spend] payload=", JSON.stringify(built.payload, (_k, v) => typeof v === "bigint" ? v.toString() : v));
     await h.relayer.submitTransact(built.payload);
     await waitForCm(h.fmd, built.cm[0]);
     await waitForCm(h.fmd, built.cm[1]);
