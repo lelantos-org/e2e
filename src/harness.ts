@@ -152,11 +152,32 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
             for (const [k, v] of Object.entries(expected)) {
                 console.log(`[debug-spend] verifier.code contains ${k}(${v.slice(0, 12)}..):`, lc.includes(v));
             }
-            // Dump deployed bytecode in chunks (small enough to dodge vitest truncation).
-            const codeNo0x = code.replace(/^0x/, "");
-            const chunkSz = 512;
-            for (let i = 0; i < codeNo0x.length; i += chunkSz) {
-                console.log(`[debug-spend] verifier.code[${i}..${i + chunkSz}]=`, codeNo0x.slice(i, i + chunkSz));
+            // Use snarkjs's canonical solidityCallData formatter, then call the
+            // verifier directly with that exact calldata. If snarkjs format also
+            // reverts, the bug is in pairing math (vkey/proof inconsistency at a
+            // level we haven't found). If snarkjs format works, ethers encoding
+            // was the bug.
+            try {
+                // @ts-expect-error snarkjs has no types
+                const sj = await import("snarkjs");
+                const proofObj = {
+                    pi_a: p.proof2x2.piA,
+                    pi_b: p.proof2x2.piB,
+                    pi_c: p.proof2x2.piC,
+                    protocol: "groth16",
+                    curve: "bn128",
+                };
+                const calldataStr: string = await sj.groth16.exportSolidityCallData(proofObj, [sdkY, sdkZ]);
+                console.log("[debug-spend] snarkjs.exportSolidityCallData=", calldataStr.slice(0, 200));
+                // calldataStr is like: ["0x..","0x.."],[["0x..","0x.."],["0x..","0x.."]],["0x..","0x.."],["0x..","0x.."]
+                // Parse it and call verifyProof with selector.
+                const args = JSON.parse("[" + calldataStr + "]");
+                const iface = new ethers.Interface(verifierAbi);
+                const data = iface.encodeFunctionData("verifyProof", args);
+                const result = await h.provider.call({ to: verifierAddr, data });
+                console.log("[debug-spend] snarkjsCalldata Verifier.verifyProof result=", result);
+            } catch (e) {
+                console.log("[debug-spend] snarkjsCalldata THREW:", (e as Error).message);
             }
         }
     } catch (e) {
