@@ -105,6 +105,26 @@ async function debugOnChainVerifySpend(h: Harness, built: { payload: unknown }):
     } catch (e) {
         console.log("[debug-spend] masp.verifyProof THREW:", (e as Error).message);
     }
+    try {
+        const sdkY: string = (built as any).__sdk_y;
+        const sdkZ: string = (built as any).__sdk_z;
+        if (sdkY && sdkZ) {
+            const verifierAddr: string = await h.masp.VERIFIER();
+            const verifierAbi = [
+                "function verifyProof(uint256[2] a, uint256[2][2] b, uint256[2] c, uint256[2] pubSignals) view returns (bool)",
+            ];
+            const verifier = new ethers.Contract(verifierAddr, verifierAbi, h.provider);
+            const ok2 = await verifier.verifyProof(
+                onchainProof.a,
+                onchainProof.b,
+                onchainProof.c,
+                [sdkY, sdkZ],
+            );
+            console.log("[debug-spend] Verifier.verifyProof(p, [y_sdk, z_sdk]) =", ok2);
+        }
+    } catch (e) {
+        console.log("[debug-spend] verifier direct THREW:", (e as Error).message);
+    }
     /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
@@ -153,6 +173,8 @@ async function debugSelfVerifySpend(built: { payload: unknown }): Promise<void> 
     const y = sc.hornerEval(coeffs, z);
     console.log("[debug-spend] sdk_y=", y.toString());
     console.log("[debug-spend] sdk_z=", z.toString());
+    (built as any).__sdk_y = y.toString();
+    (built as any).__sdk_z = z.toString();
     const proof = {
         pi_a: p.proof2x2.piA,
         pi_b: p.proof2x2.piB,
