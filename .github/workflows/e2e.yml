@@ -94,6 +94,7 @@ jobs:
           gh release download "$CIRCUITS_RELEASE" \
             --repo lelantos-org/circuits \
             --pattern '2x2.wasm' \
+            --pattern '2x2.r1cs' \
             --pattern '2x2_final.zkey' \
             --pattern 'tree_update_batch.wasm' \
             --pattern 'tree_update_batch.r1cs' \
@@ -105,6 +106,7 @@ jobs:
       - name: Verify circuit artifacts
         run: |
           test -f vendor/circuits/build/2x2_final.zkey
+          test -f vendor/circuits/build/2x2.r1cs
           test -f vendor/circuits/build/2x2_js/2x2.wasm
           test -f vendor/circuits/build/tree_update_batch_final.zkey
           test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
