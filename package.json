@@ -2,7 +2,7 @@
   "name": "@lelantos/e2e",
   "version": "0.0.0",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "test": "vitest run --reporter=verbose",
     "up": "tsx src/orchestrate.ts up",
@@ -11,8 +11,8 @@
     "urls": "tsx src/orchestrate.ts urls"
   },
   "dependencies": {
-    "@lelantos-org/circuits": "^0.3.0",
-    "@lelantos-org/sdk": "^0.3.8",
+    "@lelantos-org/circuits": "^0.4.3",
+    "@lelantos-org/sdk": "^0.4.1",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",

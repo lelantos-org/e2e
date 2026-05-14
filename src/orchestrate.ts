@@ -1,12 +1,7 @@
-// Ad-hoc CLI for the e2e stack. Useful for poking with curl from the
-// host without running vitest. Each invocation owns its own `Stack` —
-// state does not persist across processes, so for a long-lived dev
-// session use `npm run up` and keep that shell open.
-
 import { Command } from "commander";
 
-import { Stack } from "./stack";
-import { waitForSignal } from "./utils";
+import { Stack } from "./stack.js";
+import { waitForSignal } from "./utils.js";
 
 const program = new Command();
 
@@ -65,10 +60,6 @@ program.parseAsync(process.argv).catch((err) => {
     console.error(err);
     process.exit(1);
 });
-
-// ──────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────
 
 function installSigintHandler(stack: Stack): void {
     process.on("SIGINT", () => {

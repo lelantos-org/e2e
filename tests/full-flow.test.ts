@@ -1,197 +1,139 @@
-// E2E happy-path: deposit → shielded transfer → withdraw → fmd-driven sync.
-// Drives the full stack via the SDK's high-level builders + clients.
-// Merkle paths come from fmd-webserver (no local tree mirror).
-
-import { buildDeposit } from "@lelantos-org/sdk";
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { env } from "../src/env";
+import { buildDeposit } from "@lelantos-org/sdk";
+import type { DepositPhase, SpendPhase } from "@lelantos-org/sdk/wallet";
+
+import { env } from "../src/env.js";
 import {
-    type Actor,
-    buildNoteCommitment,
-    buildNullifierFromNsk,
-    cmToHex,
-    baseAmt,
-    counter,
-    deposit,
+    ASSET,
+    createTestWallet,
     type Erc20Helpers,
+    expectBalanceDeltas,
     feeFor,
-    filterRealMatches,
+    fundPayerForAsset,
     type Harness,
     newAuxRng,
-    nfToHex,
-    type Note,
-    noteFor,
-    pollUntil,
-    rngForOutput,
-    setupActors,
-    setupErc20,
+    POLL,
     setupHarness,
-    type SpendableCachedNote,
     submitIntentDirect,
-    submitTransfer,
-    submitWithdraw,
-    waitForAdvance,
+    TEST_NSK,
     withFee,
-} from "../src/harness";
+} from "../src/harness.js";
+import { baseAmt } from "../src/constants.js";
+import { makeWallet, rngForOutput, snapshotBalances } from "../src/scenario.js";
+import { counter } from "../src/utils.js";
 
-// File-unique seeds; cross-file collisions on shared anvil cause cm/nf
-// dupes when wallets touch the same `(asset, value)` slots.
-const ALICE_NSK = 0xff_a1ce_a11c0n;
-const BOB_NSK = 0xff_b0b_b0b00n;
+const ADDRS = (): Record<string, string> => ({
+    payer: env.payerAddress,
+    masp: env.maspAddress,
+    recipient: env.recipientAddress,
+});
+
+const { alice: ALICE_NSK, bob: BOB_NSK } = TEST_NSK.fullFlow;
 
 describe("masp e2e flow", () => {
     let h: Harness;
     let erc20: Erc20Helpers;
-    let alice: Actor;
-    let bob: Actor;
-    /// Alice's spendable notes. cm is re-derived inside `inputSlotFor`.
-    let aliceNotes: SpendableCachedNote[] = [];
-
-    const aliceRng = counter(0xff_a1ce_0001n);
-    const bobRng = counter(0xff_b0b_0001n);
-    const auxRng = newAuxRng(0xff_add_0001n);
+    let alice: Awaited<ReturnType<typeof createTestWallet>>;
+    let bob: Awaited<ReturnType<typeof createTestWallet>>;
 
     beforeAll(async () => {
         h = await setupHarness();
-        erc20 = await setupErc20(h.payer, env.token2, env.permit2Address, withFee(1000n));
-        ({ alice, bob } = await setupActors(h, {
-            alice: { nsk: ALICE_NSK },
-            bob: { nsk: BOB_NSK, subscribe: true },
-        }));
+        erc20 = await fundPayerForAsset(h, ASSET, withFee(1000n));
+        alice = await createTestWallet(h, ALICE_NSK);
+        bob = await createTestWallet(h, BOB_NSK);
     });
 
-    it("deposit: 100 units, alice gets a note", async () => {
-        const initialCount = await h.masp.committedCount();
-        expect(initialCount).toBe(0n);
+    it("deposit: 105 units, alice gets a note", async () => {
+        expect(await h.masp.committedCount()).toBe(0n);
 
-        const payerBefore = await erc20.balanceOf(env.payerAddress);
-        const maspBefore = await erc20.balanceOf(env.maspAddress);
-
-        const cached = await deposit({
-            h, wallet: alice, nsk: ALICE_NSK, amount: 100n, rng: aliceRng, auxRng,
+        const addrs = ADDRS();
+        const before = await snapshotBalances(erc20, addrs);
+        const phases: DepositPhase[] = [];
+        const r = await alice.deposit({
+            amount: 105n,
+            asset: ASSET,
+            onPhase: (p) => phases.push(p),
         });
+        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        expect(phases).toEqual(["signing", "submitting", "broadcast", "mined"]);
 
-        // ERC20 deltas in token base-units: principal = publicIn * scale,
-        // plus the fee scaled-and-bps'd by `feeFor`.
-        const depositFee = feeFor(100n);
-        const payerAfter = await erc20.balanceOf(env.payerAddress);
-        const maspAfter = await erc20.balanceOf(env.maspAddress);
-        expect(payerBefore - payerAfter).toBe(baseAmt(100n) + depositFee);
-        expect(maspAfter - maspBefore).toBe(baseAmt(100n) + depositFee);
+        const moved = baseAmt(105n) + feeFor(105n);
+        await expectBalanceDeltas(erc20, addrs, before, { payer: -moved, masp: moved });
 
-        // Pad note lands at leaf 1 alongside the real output at leaf 0.
-        expect(cached.leafIndex).toBe(0);
-        const adv = await waitForAdvance(0);
-        expect(adv.inserted).toBe(2);
-
-        aliceNotes.push(cached);
-
-        // /v1/path returns a root the contract recognizes.
-        const cm = buildNoteCommitment(h.P, cached.note);
-        const path = await h.fmd.fetchPath(cmToHex(cm));
-        const rootHex = "0x" + path.root.toString(16).padStart(64, "0");
-        const isKnown = await h.masp.isKnownRoot(rootHex);
-        expect(isKnown).toBe(true);
-        const committedCount = await h.masp.committedCount();
-        expect(committedCount).toBe(2n);
-    });
+        expect(await alice.balance(ASSET)).toBe(105n);
+        expect(await h.masp.committedCount()).toBe(2n);
+    }, 240_000);
 
     it("shielded transfer: alice sends 60 to bob, keeps 40 change", async () => {
-        const aliceCached = aliceNotes[0];
-        const bobOut: Note = noteFor(bob, 60n, bobRng);
-        const aliceChange: Note = noteFor(alice, 40n, aliceRng);
+        const addrs = ADDRS();
+        const before = await snapshotBalances(erc20, addrs);
 
-        const payerBefore = await erc20.balanceOf(env.payerAddress);
-        const maspBefore = await erc20.balanceOf(env.maspAddress);
-        const recipientBefore = await erc20.balanceOf(env.recipientAddress);
+        const phases: SpendPhase[] = [];
+        const r = await alice.transfer({
+            to: bob.address,
+            amount: 60n,
+            asset: ASSET,
+            onPhase: (p) => phases.push(p),
+        });
+        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await bob.awaitCommitments(r.commitments, POLL.SPEND);
+        expect(phases).toEqual(["preparing", "proving", "submitting"]);
 
-        const built = await submitTransfer({
-            h,
-            inputs: [aliceCached],
-            outputs: [bobOut, aliceChange],
-            recipients: [bob, alice],
-            auxRng,
+        await expectBalanceDeltas(erc20, addrs, before, { payer: 0n, masp: 0n, recipient: 0n });
+
+        expect(await alice.balance(ASSET)).toBe(45n);
+        expect(await bob.balance(ASSET)).toBe(60n);
+        expect(await h.masp.committedCount()).toBe(4n);
+    }, 240_000);
+
+    it("withdraw: alice unshields 40 (net) to a public address", async () => {
+        const addrs = ADDRS();
+        const before = await snapshotBalances(erc20, addrs);
+
+        // SDK `amount` is net-to-recipient; publicOut = amount + fee.
+        const r = await alice.withdraw({ to: env.recipientAddress, amount: 40n, asset: ASSET });
+        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+
+        // Contract fee is on publicOut*scale: recipient = publicOut*scale*(1-feeBps).
+        const publicOutBase = baseAmt(42n);
+        const onchainFee = (publicOutBase * 500n) / 10000n;
+        const recipientNet = publicOutBase - onchainFee;
+        await expectBalanceDeltas(erc20, addrs, before, {
+            payer: 0n,
+            masp: -recipientNet,
+            recipient: recipientNet,
         });
 
-        // Shielded transfer: zero ERC20 movement.
-        const payerAfter = await erc20.balanceOf(env.payerAddress);
-        const maspAfter = await erc20.balanceOf(env.maspAddress);
-        const recipientAfter = await erc20.balanceOf(env.recipientAddress);
-        expect(payerAfter).toBe(payerBefore);
-        expect(maspAfter).toBe(maspBefore);
-        expect(recipientAfter).toBe(recipientBefore);
-
-        // Bob's cm at leaf 2, Alice's change at leaf 3.
-        const bobPath = await h.fmd.fetchPath(cmToHex(built.cm[0]));
-        const changePath = await h.fmd.fetchPath(cmToHex(built.cm[1]));
-        expect(bobPath.leafIndex).toBe(2);
-        expect(changePath.leafIndex).toBe(3);
-        const adv = await waitForAdvance(2);
-        expect(adv.inserted).toBe(2);
-
-        // Alice swaps her 100 for the 40 change; previous note is spent.
-        aliceNotes = [{ note: aliceChange, nsk: ALICE_NSK, leafIndex: changePath.leafIndex }];
-
-        const spentNf = buildNullifierFromNsk(h.P, ALICE_NSK, aliceCached.note.rho);
-        const isSpent = await h.masp.spent(nfToHex(spentNf));
-        expect(isSpent).toBe(true);
-        const committedCount = await h.masp.committedCount();
-        expect(committedCount).toBe(4n);
-    });
-
-    it("withdraw: alice unshields 40 to a public address", async () => {
-        const aliceCached = aliceNotes[0];
-        expect(aliceCached.note.value).toBe(40n);
-
-        const payerBefore = await erc20.balanceOf(env.payerAddress);
-        const maspBefore = await erc20.balanceOf(env.maspAddress);
-        const recipientBefore = await erc20.balanceOf(env.recipientAddress);
-
-        await submitWithdraw({
-            h,
-            input: aliceCached,
-            publicOut: 40n,
-            change: [noteFor(alice, 0n, aliceRng), noteFor(alice, 0n, aliceRng)],
-            changeRecipient: alice,
-            auxRng,
-        });
-
-        const adv = await waitForAdvance(4);
-        expect(adv.inserted).toBe(2);
-
-        // Withdraw: recipient receives `outAmt - fee` in base-units; MASP
-        // balance drops by the same net.
-        const withdrawFee = feeFor(40n);
-        const net = baseAmt(40n) - withdrawFee;
-        const payerAfter = await erc20.balanceOf(env.payerAddress);
-        const maspAfter = await erc20.balanceOf(env.maspAddress);
-        const recipientAfter = await erc20.balanceOf(env.recipientAddress);
-        const committedCount = await h.masp.committedCount();
-        expect(payerAfter).toBe(payerBefore);
-        expect(maspBefore - maspAfter).toBe(net);
-        expect(recipientAfter - recipientBefore).toBe(net);
-        expect(committedCount).toBe(6n);
-    });
+        expect(await alice.balance(ASSET)).toBe(3n);
+        expect(await h.masp.committedCount()).toBe(6n);
+    }, 240_000);
 
     it("submitIntent reverts when Permit2 maxTotal cannot cover principal + fee", async () => {
-        const principal = 50n;
+        // SDK Wallet computes maxTotal internally; use direct-path helper to
+        // force an undersized maxTotal.
+        const aliceRng = counter(0xff_a1ce_0099n);
+        const auxRng = newAuxRng(0xff_add_0099n);
+        const aliceLegacy = makeWallet(h.P, h.J, ALICE_NSK);
         const built = buildDeposit({
-            ...h.bundleCommon(),
-            publicIn: principal,
-            recipient: alice.recipient,
+            P: h.P,
+            J: h.J,
+            chainId: env.chainId,
+            asset: ASSET,
+            payerAddress: env.payerAddress,
+            recipientAddress: env.recipientAddress,
+            publicIn: 50n,
+            recipient: aliceLegacy.recipient,
             output0: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(), aux: rngForOutput(auxRng) },
             output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng() },
         });
-        // maxTotal = principal-in-base omits the fee; Permit2 reverts when
-        // MASP requests `inAmt + fee`. Margin is exactly the fee leg.
         await expect(submitIntentDirect({
             payer: h.payer,
             intent: built.intent,
             aux: built.aux,
             tokenAddr: env.token2,
-            maxTotal: baseAmt(principal),
+            maxTotal: baseAmt(50n),
         })).rejects.toThrow();
     });
 
@@ -201,29 +143,18 @@ describe("masp e2e flow", () => {
             "function feeBps() view returns (uint16)",
             "function treasury() view returns (address)",
         ], h.provider);
-        const feeBps = await view.feeBps();
-        const treasury = (await view.treasury()) as string;
-        expect(feeBps).toBe(500n);
-        expect(treasury).not.toBe(ethers.ZeroAddress);
-        // Deposit 100 → fee 5; withdraw 40 → fee 2. Lower bound — other
-        // test files may have accrued more on the shared anvil.
+        expect(await view.feeBps()).toBe(500n);
+        expect((await view.treasury()) as string).not.toBe(ethers.ZeroAddress);
+        // Lower bound — other test files may have accrued more on the shared anvil.
         const accrued = (await view.accruedFee(env.token2)) as bigint;
-        expect(accrued).toBeGreaterThanOrEqual(feeFor(100n) + feeFor(40n));
+        expect(accrued).toBeGreaterThanOrEqual(feeFor(105n) + feeFor(40n));
     });
 
-    it("client sync: bob recovers his 60-unit balance via fmd-webserver", async () => {
-        // FMD γ=5 ⇒ ~1/32 false-positive rate per non-recipient ciphertext,
-        // so listMatches can return decoys alongside the real one. Filter
-        // via decryption before asserting cardinality.
-        const real = await pollUntil(
-            async () => {
-                const ms = await h.fmd.listMatches({ subscription: bob.subscriptionId!, limit: 50 });
-                const r = filterRealMatches(h.P, h.J, bob, ms);
-                return r.length >= 1 ? r : null;
-            },
-            { label: "bob matches", timeoutMs: 60_000 },
-        );
-        expect(real.length).toBe(1);
-        expect(real[0].leafIndex).toBe(2);
-    });
+    it("client sync: fresh wallet recovers bob's 60-unit balance", async () => {
+        // Fresh in-process wallet for bob — empty note store. sync() must
+        // pull, trial-decrypt, and surface the 60-unit note for asset 2.
+        const bobFresh = await createTestWallet(h, BOB_NSK);
+        await bobFresh.sync({ limit: 200 });
+        expect(await bobFresh.balance(ASSET)).toBe(60n);
+    }, 60_000);
 });

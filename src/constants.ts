@@ -1,51 +1,19 @@
-// Single source of truth for every magic value the e2e runner needs.
-// Anything that's a literal somebody else might want to change — chain
-// id, ports, paths, ABIs, timeouts, gamma — lives here.
-//
-// Splits:
-//   - chain      : CHAIN_ID
-//   - paths      : E2E_DIR, CONFIG_DIR, CONTRACTS_DIR
-//   - network    : DB_URL, ANVIL_RPC_INTERNAL, container ports
-//   - rust env   : BASE_RUST_ENV (DATABASE_URL + RUST_LOG)
-//   - runtime    : DEFAULT_STARTUP_MS
-//   - test domain: TREE_DEPTH, FMD_GAMMA, ASSET (mDAI id)
-//   - solidity   : MASP_ABI, MOCK_ERC20_ABI
-
 import { resolve } from "node:path";
 
-// ──────────────────────────────────────────────────────────────────────
-// Chain
-// ──────────────────────────────────────────────────────────────────────
-
-/// EVM chain id baked into anvil + every backend's `*_CHAIN_<id>_*` env
-/// var name.
 export const CHAIN_ID = "31337";
 
-// ──────────────────────────────────────────────────────────────────────
-// Paths (host)
-// ──────────────────────────────────────────────────────────────────────
-
-// src/constants.ts → src → e2e
-// backend, circuits, contracts are git submodules under e2e/vendor/.
 export const E2E_DIR = resolve(__dirname, "..");
 export const CONFIG_DIR = resolve(E2E_DIR, "config");
+export const CIRCUITS_DIR = resolve(E2E_DIR, "circuits");
 export const VENDOR_DIR = resolve(E2E_DIR, "vendor");
 export const CONTRACTS_DIR = resolve(VENDOR_DIR, "contracts");
 
-// ──────────────────────────────────────────────────────────────────────
-// Container network
-// ──────────────────────────────────────────────────────────────────────
-
-/// Connection string used by every backend container. Hostname matches
-/// the `postgres` network alias set in `services.ts`.
+// Hostname matches the `postgres` network alias set in `services.ts`.
 export const DB_URL = "postgres://postgres:postgres@postgres:5432/postgres";
 
-/// Anvil RPC URL backend containers use over the testcontainers network
-/// (host-side tests use the ephemeral mapped port from `Stack.up()`).
+// Backend-container URL; host-side tests use the ephemeral mapped port.
 export const ANVIL_RPC_INTERNAL = "http://anvil:8545";
 
-/// Internal container ports. Host side gets ephemeral mapped ports via
-/// `getMappedPort(internal)`.
 export const PORT = {
     POSTGRES: 5432,
     ANVIL: 8545,
@@ -55,61 +23,49 @@ export const PORT = {
     METAQUOTER: 8081,
 } as const;
 
-// ──────────────────────────────────────────────────────────────────────
-// Rust env shared by every backend
-// ──────────────────────────────────────────────────────────────────────
-
 export const BASE_RUST_ENV = {
     DATABASE_URL: DB_URL,
     RUST_LOG: "info,sqlx=warn",
 } as const;
 
-// ──────────────────────────────────────────────────────────────────────
-// Runtime
-// ──────────────────────────────────────────────────────────────────────
-
-/// Per-container startup timeout. Cold image pull + DB migrate + chain
-/// connect should finish well under 60s; bump if your runner is slow.
 export const DEFAULT_STARTUP_MS = 60_000;
 
-/// Polling/wait budgets shared across the test suite. Keep in one place
-/// so tightening or loosening CI tolerance stays a single edit.
 export const TIMEOUT = {
-    /// Default `pollUntil` budget (waitForCm, waitForAdvance, fmd health).
     POLL_DEFAULT_MS: 120_000,
-    /// Batch-flush relayer cron tick + tx mining; needs more than POLL_DEFAULT.
     BATCH_FLUSH_MS: 150_000,
-    /// Whole-test cap for batch-flush vitest case (relayer cron + N submits).
     BATCH_FLUSH_TEST_MS: 240_000,
 } as const;
 
-// ──────────────────────────────────────────────────────────────────────
-// Test-domain knobs
-// ──────────────────────────────────────────────────────────────────────
+export const POLL = {
+    COMMITMENT:   { maxAttempts: 80, pollMs: 2000 },
+    SPEND:        { maxAttempts: 60, pollMs: 1500 },
+    ROOT_ADVANCE: { maxAttempts: 60, pollMs: 2500 },
+    RELAYER_TX:   { maxAttempts: 60, pollMs: 2500 },
+} as const;
 
-/// Quaternary commitment-tree depth — must match `circuits/2x2.circom`
-/// `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
+// Must match `circuits/2x2.circom` `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
 export const TREE_DEPTH = 10;
 
-/// FMD γ. False-positive rate = 2^-γ. Must match the value the asset
-/// registry + circuit were compiled against.
+// FMD γ. False-positive rate = 2^-γ. Must match asset registry + circuit.
 export const FMD_GAMMA = 5;
 
-/// Asset id 2 = mDAI (plain MockERC20). Id 1 is WETH9 mock with no
-/// public `mint(address,uint256)` selector, so the runner mints into
-/// the mDAI slot.
-export const ASSET = 2n;
+// Mirrors `contracts/test/fixtures/asset_registry.json`.
+export const ASSETS = {
+    WETH: 1n,  // WETH9 mock — no public `mint(address,uint256)`; use `setupWeth`.
+    MDAI: 2n,  // MockERC20 with public mint; default for fee/scale helpers.
+    MWBTC: 3n, // MockERC20, scale = 1 (8-decimal).
+} as const;
 
-/// Basis-point fee deployed on MASP. 500 bps = 5%. Threaded into
-/// `DeployTest.s.sol` via `MASP_FEE_BPS` and used by tests to compute
-/// expected balance deltas + accrued treasury fees.
+// Default asset for feeFor/baseAmt/withFee.
+export const ASSET = ASSETS.MDAI;
+
+// Burn / non-allowlisted adapter sentinel for negative tests.
+export const DEAD_ADDRESS = "0x000000000000000000000000000000000000dEaD" as const;
+
+// 500 bps = 5%. Threaded into `DeployTest.s.sol` via `MASP_FEE_BPS`.
 export const FEE_BPS = 500n;
 
-/// Per-asset `scale` mirroring `contracts/test/fixtures/asset_registry.json`.
-/// Contract converts publicIn-units → token base-units via `inAmt = publicIn * scale`,
-/// then `fee = inAmt * feeBps / 10000`. Tests compute funding / maxTotal / accrued
-/// fee in base-units, so every helper that crosses the on-chain boundary takes an
-/// asset id and looks up its scale here.
+// Mirrors `contracts/test/fixtures/asset_registry.json`.
 export const SCALES: Record<string, bigint> = {
     "1": 10_000_000_000n, // WETH (18 dec)
     "2": 10_000_000_000n, // mDAI (18 dec)
@@ -122,27 +78,19 @@ export function scaleFor(asset: bigint): bigint {
     return s;
 }
 
-/// Token base-units principal (`inAmt = publicIn * scale`).
 export function baseAmt(amount: bigint, asset: bigint = ASSET): bigint {
     return amount * scaleFor(asset);
 }
 
-/// Token base-units fee for a publicIn-units amount, matching contract math:
-///   fee = (publicIn * scale * feeBps) / 10000
+// Matches contract math: fee = (publicIn * scale * feeBps) / 10000.
 export function feeFor(amount: bigint, asset: bigint = ASSET): bigint {
     const inAmt = amount * scaleFor(asset);
     return (inAmt * FEE_BPS) / 10000n;
 }
 
-/// Token base-units total (`inAmt + fee`) for a publicIn-units amount. Use
-/// for ERC20 funding sizes, Permit2 `maxTotal`, etc.
 export function withFee(amount: bigint, asset: bigint = ASSET): bigint {
     return amount * scaleFor(asset) + feeFor(amount, asset);
 }
-
-// ──────────────────────────────────────────────────────────────────────
-// Solidity ABIs
-// ──────────────────────────────────────────────────────────────────────
 
 export const MASP_ABI = [
     "function isKnownRoot(bytes32) view returns (bool)",
@@ -164,7 +112,22 @@ export const MOCK_ERC20_ABI = [
     "function balanceOf(address) view returns (uint256)",
 ] as const;
 
-/// Test stubs deployed alongside the swap stack when SWAP_ENABLED=true.
+export const MOCK_WETH9_ABI = [
+    "function deposit() payable",
+    "function approve(address spender, uint256 amount) public returns (bool)",
+    "function balanceOf(address) view returns (uint256)",
+] as const;
+
+// submitIntent + cancelIntent + IntentEscrowed event; separated from MASP_ABI
+// because submitIntentDirect bypasses the SDK Wallet path.
+export const MASP_INTENT_ABI = [
+    "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm,uint256[2] cvDep0,uint256[2] cvDep1,uint256 rcvTotal) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
+    "function cancelIntent(uint256 id)",
+    "function cancelDelay() view returns (uint32)",
+    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, bytes32 cm0, bytes32 cm1, uint256 cvDep0X, uint256 cvDep0Y, uint256 cvDep1X, uint256 cvDep1Y, uint256 rcvTotal, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
+    "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
+] as const;
+
 export const MOCK_QUOTER_V2_ABI = [
     "function set(address tokenIn, address tokenOut, uint24 fee, uint256 amountOut, uint256 gasEstimate)",
 ] as const;
@@ -174,9 +137,7 @@ export const MOCK_SWAP_ROUTER_ABI = [
     "function nextOut() view returns (uint256)",
 ] as const;
 
-/// Subset of `SwapWrapper` methods the e2e tests call from the host. Full
-/// `SwapArgs` calldata layout lives in `swap-harness.ts` next to the
-/// encoder — no need to duplicate the schema here.
+// Full SwapArgs calldata layout lives in `swap-harness.ts`.
 export const SWAP_WRAPPER_ABI = [
     "function adapterAllowed(address) view returns (bool)",
     "event SwapExecuted(address indexed adapter, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 actualOut, uint256 dust, uint256 intentId)",

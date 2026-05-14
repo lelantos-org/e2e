@@ -1,7 +1,3 @@
-// Lifecycle for the programmatic e2e stack. Owns container starts, the
-// host-side `forge` deploy, and shutdown. Service shape lives in
-// `services.ts`; deterministic accounts in `accounts.ts`.
-
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -11,27 +7,21 @@ import {
     type StartedTestContainer,
 } from "testcontainers";
 
-import { DEPLOYER, PAYER, RECIPIENT } from "./accounts";
-import { CHAIN_ID, CONTRACTS_DIR, FEE_BPS } from "./constants";
-import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2";
-import { ANVIL, backendSpecs, POSTGRES, runService } from "./services";
+import { DEPLOYER, PAYER, RECIPIENT } from "./accounts.js";
+import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, FEE_BPS } from "./constants.js";
+import { log } from "./utils.js";
+import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2.js";
+import { ANVIL, backendSpecs, POSTGRES, runService } from "./services.js";
 
 const execFileAsync = promisify(execFile);
-
-// ──────────────────────────────────────────────────────────────────────
-// Public types
-// ──────────────────────────────────────────────────────────────────────
 
 export interface Addresses {
     verifier: string;
     treeUpdateVerifier: string;
     masp: string;
-    /// Token id (from the asset registry) → ERC20 address.
     tokens: Record<number, string>;
     weth?: string;
-    /// Uniswap Permit2 deployment used by MASP for deposit pulls.
     permit2: string;
-    /// Populated only when `Stack.deploy({ withSwap: true })` is requested.
     swap?: SwapAddresses;
 }
 
@@ -47,8 +37,6 @@ export interface Urls {
     relayer: string;
     fmd: string;
     explorer: string;
-    /// Populated only when the swap stack is deployed (and the metaquoter
-    /// container started).
     metaquoter?: string;
 }
 
@@ -63,48 +51,34 @@ export interface StackEnv extends Urls {
     swap?: SwapAddresses;
 }
 
-
-// ──────────────────────────────────────────────────────────────────────
-// Stack
-// ──────────────────────────────────────────────────────────────────────
-
 export class Stack {
     private network?: StartedNetwork;
     private infra: StartedTestContainer[] = []; // [postgres, anvil]
     private backends: StartedTestContainer[] = [];
     private addresses?: Addresses;
 
-    /// Phase 1 — postgres + anvil. Returns the host-mapped RPC URL; the
-    /// rest of `Urls` is populated by `upBackend()`.
     async up(): Promise<{ rpc: string }> {
+        await ensureCircuits();
         this.network = await new Network().start();
 
         const postgres = await runService(POSTGRES, this.network);
         const anvil = await runService(ANVIL, this.network);
         this.infra = [postgres, anvil];
 
-        // Pre-deploy canonical Permit2. DeployTest.s.sol's `DeployPermit2`
-        // lib only `vm.etch`s the bytecode (cheatcode-local), which gets
-        // dropped under `--broadcast` simulation; MASP ctor then reverts
-        // ZeroPermit2() because `permit2.code.length == 0` on-chain.
+        // DeployPermit2 in DeployTest.s.sol uses vm.etch which is dropped under
+        // --broadcast; MASP ctor reverts ZeroPermit2() without this pre-deploy.
         await preDeployPermit2(this.rpcUrl());
 
         return { rpc: this.rpcUrl() };
     }
 
-    /// Phase 2 — host-side forge deploy. Always deploys the swap stack
-    /// (MockQuoterV2 + MockSwapRouter02 + UniV3Adapter + SwapWrapper)
-    /// alongside MASP. Parses DeployTest.s.sol's KEY=0xADDR stdout into a
-    /// typed `Addresses`.
     async deploy(): Promise<Addresses> {
         const rpcUrl = this.rpcUrl();
         const env: Record<string, string> = {
             ...process.env as Record<string, string>,
             MASP_FEE_BPS: FEE_BPS.toString(),
             SWAP_ENABLED: "true",
-            // `preDeployPermit2` (run in `up()`) puts canonical Permit2
-            // bytecode at this address. Tell DeployTest about it so it
-            // skips the `vm.getCode` deploy fallback.
+            // up() already pre-deployed Permit2; skip DeployTest's vm.getCode fallback.
             PERMIT2: CANONICAL_PERMIT2_ADDRESS,
         };
 
@@ -128,9 +102,7 @@ export class Stack {
         return this.addresses;
     }
 
-    /// Phase 3 — backend services. Ingester runs alone first (it owns the
-    /// schema-creating migrations); the remaining five start in parallel
-    /// once the schema is in place.
+    // Ingester runs alone first (owns schema migrations); the rest start in parallel.
     async upBackend(addrs: Addresses): Promise<Urls> {
         if (!this.network) throw new Error("upBackend: call up() first");
         const specs = backendSpecs(addrs.masp, addrs.swap);
@@ -206,12 +178,15 @@ export class Stack {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────
-
 function hostUrl(c: StartedTestContainer, internalPort: number): string {
     return `http://localhost:${c.getMappedPort(internalPort)}`;
+}
+
+// Relayer mounts <e2e>/circuits/ at /circuits and reads tree_update_batch.{wasm,r1cs,_final.zkey}
+// at startup. The fetch script is idempotent (skips if .version matches).
+async function ensureCircuits(): Promise<void> {
+    log("fetching circuits…");
+    await execFileAsync("scripts/fetch-circuits.sh", [], { cwd: E2E_DIR });
 }
 
 function parseDeployOutput(stdout: string): Addresses {

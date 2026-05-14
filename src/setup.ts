@@ -1,19 +1,14 @@
-// Vitest globalSetup: bring the stack up before any test loads, tear it
-// down after. URLs + addresses are forwarded to tests through
-// `process.env`; `src/env.ts` consumes them.
-
 import { execSync } from "node:child_process";
 
 resolveDockerHost();
 disableRyuk();
 
-import type { StackEnv } from "./stack";
-import { log } from "./utils";
+import type { StackEnv } from "./stack.js";
+import { log } from "./utils.js";
 
 export default async function setup() {
-    // Dynamic import: dockerHost / Ryuk env tweaks above must land before
-    // testcontainers loads.
-    const { Stack } = await import("./stack");
+    // Dynamic import: env tweaks above must land before testcontainers loads.
+    const { Stack } = await import("./stack.js");
     const stack = new Stack();
 
     process.on("SIGINT", () => {
@@ -46,13 +41,7 @@ export default async function setup() {
     };
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────
-
-/// Resolve the docker socket from the active docker context (colima,
-/// Docker Desktop, etc.) before testcontainers loads — it inspects
-/// DOCKER_HOST at module-load time.
+// testcontainers reads DOCKER_HOST at module-load time.
 function resolveDockerHost(): void {
     if (process.env.DOCKER_HOST) return;
     try {
@@ -66,9 +55,7 @@ function resolveDockerHost(): void {
     }
 }
 
-/// Ryuk (the testcontainers reaper) needs to run privileged and pulls a
-/// separate image; on colima it fails the default "Started" log wait.
-/// Vitest's globalTeardown handles cleanup deterministically anyway.
+// Ryuk fails the "Started" log wait on colima; teardown is handled by globalTeardown.
 function disableRyuk(): void {
     process.env.TESTCONTAINERS_RYUK_DISABLED ??= "true";
 }

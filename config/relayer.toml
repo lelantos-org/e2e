@@ -13,9 +13,10 @@ pool_address = "0x0000000000000000000000000000000000000000"
 # Overridden by RELAYER_CHAIN_31337_SIGNER_KEY.
 signer_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 receipt_timeout_s = 60
-flush_interval_s = 60
+flush_interval_s = 5
 
 [prover]
-wasm_path = "/app/tree_update_batch_js/tree_update_batch.wasm"
-r1cs_path = "/app/tree_update_batch.r1cs"
-zkey_path = "/app/tree_update_batch_final.zkey"
+# Mounted from <e2e>/circuits/ by services.ts (populated via scripts/fetch-circuits.sh).
+wasm_path = "/circuits/tree_update_batch.wasm"
+r1cs_path = "/circuits/tree_update_batch.r1cs"
+zkey_path = "/circuits/tree_update_batch_final.zkey"

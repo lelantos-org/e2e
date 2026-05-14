@@ -1,21 +1,11 @@
-// E2E: relayer batches multiple pending intents into a single
-// `flushBatch` tx.
-//
-// Fires N submitIntent txs back-to-back without waiting for cm
-// indexation between them. The relayer's flush cron picks all N pending
-// IntentEscrowed events from the DB on its next tick and drains them
-// under one batched tree-update SNARK. Asserts:
-//   - exactly one tx contains `IntentFlushed × N`
-//   - that same tx contains one `RootAdvanced` with `inserted = 2*N`
-//
-// Other tests serialize on `waitForCm`, which forces actualCount=1 every
-// flush. This file is the only one exercising actualCount > 1.
+// Asserts the relayer drains N pending IntentEscrowed events into one flushBatch
+// tx (IntentFlushed × N + RootAdvanced with inserted = 2*N).
 
 import { buildDeposit, type Field } from "@lelantos-org/sdk";
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { env } from "../src/env";
+import { env } from "../src/env.js";
 import {
     counter,
     type Harness,
@@ -26,14 +16,15 @@ import {
     rngForOutput,
     setupHarness,
     submitIntentDirect,
+    TEST_NSK,
     type TestWallet,
     TIMEOUT,
     waitForBatchFlushTx,
     waitForCm,
     withFee,
-} from "../src/harness";
+} from "../src/harness.js";
 
-const ALICE_NSK = 0xbf_a1ce_a11c0n;
+const { alice: ALICE_NSK } = TEST_NSK.batchFlush;
 const N = 3;
 const DEPOSIT_AMT = 10n;
 
@@ -57,10 +48,7 @@ describe("batch flush", () => {
     it(`relayer batches ${N} pending intents into one flushBatch tx`, async () => {
         const startBlock = await h.provider.getBlockNumber();
 
-        // Fire N submitIntents back-to-back. Each `submitIntentDirect`
-        // awaits its OWN receipt only — does not wait for the relayer
-        // flush. Relayer accumulates all N in its pending pool, then
-        // drains them under one flushBatch.
+        // submitIntentDirect awaits its own receipt only; relayer flush is async.
         const submitted: { intentId: bigint; cm0: Field }[] = [];
         for (let i = 0; i < N; i++) {
             const built = buildDeposit({
@@ -99,18 +87,16 @@ describe("batch flush", () => {
         const receipt = await h.provider.getTransactionReceipt(flushTx);
         if (!receipt) throw new Error("flush receipt missing");
 
-        // Exactly N IntentFlushed events in the single batch tx, each id once.
         const flushed = parseContractLogs(receipt, masp, "IntentFlushed");
         expect(flushed.length).toBe(N);
         const idsInTx = new Set(flushed.map((l) => (l.args[0] as bigint).toString()));
         expect(idsInTx).toEqual(new Set(wantedIds.map((id) => id.toString())));
 
-        // Single RootAdvanced with inserted = 2*N (each intent contributes 2 cms).
+        // Each intent contributes 2 cms.
         const rootLogs = parseContractLogs(receipt, masp, "RootAdvanced");
         expect(rootLogs.length).toBe(1);
         expect(rootLogs[0].args.inserted).toBe(BigInt(2 * N));
 
-        // All N real-output cms eventually indexed by fmd.
         for (const s of submitted) {
             await waitForCm(h.fmd, s.cm0);
         }

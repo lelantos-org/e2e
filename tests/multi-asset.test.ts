@@ -1,38 +1,23 @@
-// Multi-asset deposit + withdraw flow:
-//   1. deposit 10 asset 1 (WETH)
-//   2. deposit 20 asset 2 (mDAI)
-//   3. withdraw 5 asset 1
-//   4. withdraw 10 asset 2
-// Asserts transparent + shielded balances per asset.
-
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { env } from "../src/env";
+import { baseAmt, feeFor } from "../src/constants.js";
+import { env } from "../src/env.js";
 import {
-    baseAmt,
-    counter,
-    deposit,
+    ASSETS,
+    createTestWallet,
     type Erc20Helpers,
-    feeFor,
+    fundPayerForAsset,
     type Harness,
-    makeWallet,
-    newAuxRng,
-    type Note,
-    noteFor,
-    setupErc20,
+    POLL,
     setupHarness,
-    setupWeth,
     snapshotBalances,
-    type SpendableCachedNote,
-    submitWithdraw,
-    type TestWallet,
+    TEST_NSK,
     withFee,
-} from "../src/harness";
+} from "../src/harness.js";
 
-const ALICE_NSK = 0xaa_a1ce_a11c0n;
-const ASSET_WETH = 1n;
-const ASSET_MDAI = 2n;
+const { alice: ALICE_NSK } = TEST_NSK.multiAsset;
+const { WETH: ASSET_WETH, MDAI: ASSET_MDAI } = ASSETS;
 const DEPOSIT_WETH = 10n;
 const DEPOSIT_MDAI = 20n;
 const WITHDRAW_WETH = 5n;
@@ -40,16 +25,11 @@ const WITHDRAW_MDAI = 10n;
 
 describe("multi-asset deposit + withdraw", () => {
     let h: Harness;
-    let alice: TestWallet;
+    let alice: Awaited<ReturnType<typeof createTestWallet>>;
     let weth: Erc20Helpers;
     let mdai: Erc20Helpers;
     let baselineWeth: Record<string, bigint>;
     let baselineMdai: Record<string, bigint>;
-    /// Per-asset spendable note. cm is re-derived inside `inputSlotFor`.
-    const spendable = new Map<bigint, SpendableCachedNote>();
-
-    const aliceRng = counter(0xaa_a1ce_0001n);
-    const auxRng = newAuxRng(0xaa_add_0001n);
 
     const TRACKED = {
         payer: env.payerAddress,
@@ -60,46 +40,15 @@ describe("multi-asset deposit + withdraw", () => {
 
     beforeAll(async () => {
         h = await setupHarness();
-        alice = makeWallet(h.P, h.J, ALICE_NSK);
-        weth = await setupWeth(h.payer, env.token1, env.permit2Address, withFee(DEPOSIT_WETH, ASSET_WETH));
-        mdai = await setupErc20(h.payer, env.token2, env.permit2Address, withFee(DEPOSIT_MDAI, ASSET_MDAI));
-        // Snapshot AFTER setup but BEFORE any deposit, so subsequent
-        // assertions describe what THIS test moved (not residual state
-        // from other test files sharing this anvil).
+        alice = await createTestWallet(h, ALICE_NSK);
+        weth = await fundPayerForAsset(h, ASSET_WETH, withFee(DEPOSIT_WETH, ASSET_WETH));
+        mdai = await fundPayerForAsset(h, ASSET_MDAI, withFee(DEPOSIT_MDAI, ASSET_MDAI));
         baselineWeth = await snapshot(weth);
         baselineMdai = await snapshot(mdai);
     });
 
-    async function depositAsset(asset: bigint, amount: bigint) {
-        const tokenAddr = asset === ASSET_WETH ? env.token1 : env.token2;
-        spendable.set(asset, await deposit({
-            h, wallet: alice, nsk: ALICE_NSK, amount, rng: aliceRng, auxRng, asset, tokenAddr,
-        }));
-    }
-
-    async function withdrawAsset(asset: bigint, publicOut: bigint) {
-        const cur = spendable.get(asset);
-        if (!cur) throw new Error(`no spendable note cached for asset ${asset}`);
-        const remaining = cur.note.value - publicOut;
-        const change0: Note = noteFor(alice, remaining, aliceRng, asset);
-        const change1: Note = noteFor(alice, 0n, aliceRng, asset);
-
-        const built = await submitWithdraw({
-            h, input: cur, publicOut, change: [change0, change1],
-            changeRecipient: alice, auxRng, asset,
-        });
-        spendable.set(asset, {
-            note: change0,
-            nsk: ALICE_NSK,
-            // submitWithdraw waits for cm[0] (change0); refetch leaf via inputSlotFor on next spend.
-            leafIndex: 0,
-        });
-        return built;
-    }
-
-    // Shield: payer pays inAmt + fee, MASP balance bumps by inAmt + fee.
-    // Unshield: MASP sends outAmt - fee to recipient, fee stays accrued.
-    // All numbers below in token base-units (publicIn × per-asset scale).
+    // At these magnitudes integer division zeroes the SDK fee, so net delta
+    // simplifies to baseAmt(amount) - feeFor(amount).
     const DEPOSIT_WETH_BASE = baseAmt(DEPOSIT_WETH, ASSET_WETH);
     const DEPOSIT_MDAI_BASE = baseAmt(DEPOSIT_MDAI, ASSET_MDAI);
     const WITHDRAW_WETH_BASE = baseAmt(WITHDRAW_WETH, ASSET_WETH);
@@ -112,34 +61,40 @@ describe("multi-asset deposit + withdraw", () => {
     const NET_WITHDRAW_MDAI = WITHDRAW_MDAI_BASE - UNSHIELD_FEE_MDAI;
 
     it("deposit 10 WETH", async () => {
-        await depositAsset(ASSET_WETH, DEPOSIT_WETH);
+        const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
+        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
         const cur = await snapshot(weth);
         expect(cur.payer - baselineWeth.payer).toBe(-(DEPOSIT_WETH_BASE + SHIELD_FEE_WETH));
         expect(cur.masp - baselineWeth.masp).toBe(DEPOSIT_WETH_BASE + SHIELD_FEE_WETH);
-    });
+        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
+    }, 240_000);
 
     it("deposit 20 mDAI", async () => {
-        await depositAsset(ASSET_MDAI, DEPOSIT_MDAI);
+        const r = await alice.deposit({ amount: DEPOSIT_MDAI, asset: ASSET_MDAI });
+        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
         const cur = await snapshot(mdai);
         expect(cur.payer - baselineMdai.payer).toBe(-(DEPOSIT_MDAI_BASE + SHIELD_FEE_MDAI));
         expect(cur.masp - baselineMdai.masp).toBe(DEPOSIT_MDAI_BASE + SHIELD_FEE_MDAI);
-    });
+        expect(alice.balance(ASSET_MDAI)).toBe(DEPOSIT_MDAI);
+    }, 240_000);
 
     it("withdraw 5 WETH (recipient receives net of unshield fee)", async () => {
         const before = await snapshot(weth);
-        await withdrawAsset(ASSET_WETH, WITHDRAW_WETH);
+        const r = await alice.withdraw({ to: env.recipientAddress, amount: WITHDRAW_WETH, asset: ASSET_WETH });
+        await alice.awaitCommitments(r.commitments, POLL.SPEND);
         const cur = await snapshot(weth);
         expect(cur.recipient - before.recipient).toBe(NET_WITHDRAW_WETH);
         expect(before.masp - cur.masp).toBe(NET_WITHDRAW_WETH);
-    });
+    }, 240_000);
 
     it("withdraw 10 mDAI (recipient receives net of unshield fee)", async () => {
         const before = await snapshot(mdai);
-        await withdrawAsset(ASSET_MDAI, WITHDRAW_MDAI);
+        const r = await alice.withdraw({ to: env.recipientAddress, amount: WITHDRAW_MDAI, asset: ASSET_MDAI });
+        await alice.awaitCommitments(r.commitments, POLL.SPEND);
         const cur = await snapshot(mdai);
         expect(cur.recipient - before.recipient).toBe(NET_WITHDRAW_MDAI);
         expect(before.masp - cur.masp).toBe(NET_WITHDRAW_MDAI);
-    });
+    }, 240_000);
 
     it("balances reconcile across both assets", async () => {
         const w = await snapshot(weth);
@@ -156,10 +111,8 @@ describe("multi-asset deposit + withdraw", () => {
         );
         expect(m.recipient - baselineMdai.recipient).toBe(NET_WITHDRAW_MDAI);
 
-        expect(spendable.get(ASSET_WETH)?.note.value).toBe(DEPOSIT_WETH - WITHDRAW_WETH);
-        expect(spendable.get(ASSET_WETH)?.note.asset).toBe(ASSET_WETH);
-        expect(spendable.get(ASSET_MDAI)?.note.value).toBe(DEPOSIT_MDAI - WITHDRAW_MDAI);
-        expect(spendable.get(ASSET_MDAI)?.note.asset).toBe(ASSET_MDAI);
+        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH);
+        expect(alice.balance(ASSET_MDAI)).toBe(DEPOSIT_MDAI - WITHDRAW_MDAI);
     });
 
     it("MASP accrues correct shield + unshield fees per asset", async () => {
@@ -168,8 +121,6 @@ describe("multi-asset deposit + withdraw", () => {
         ], h.provider);
         const wethAccrued = (await masp.accruedFee(env.token1)) as bigint;
         const mdaiAccrued = (await masp.accruedFee(env.token2)) as bigint;
-        // Lower bound — other test files may have accrued more on the
-        // shared anvil. This file's contribution must be present.
         expect(wethAccrued).toBeGreaterThanOrEqual(SHIELD_FEE_WETH + UNSHIELD_FEE_WETH);
         expect(mdaiAccrued).toBeGreaterThanOrEqual(SHIELD_FEE_MDAI + UNSHIELD_FEE_MDAI);
     });

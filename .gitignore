@@ -1,4 +1,5 @@
 node_modules/
 runner/dist/
 runner/coverage/
+circuits/
 *.log

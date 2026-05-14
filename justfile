@@ -18,6 +18,12 @@ up:
 deploy:
     cd "{{ROOT}}" && npm run deploy
 
+# Download tree_update_batch artifacts (wasm/r1cs/zkey) used by the relayer's
+# prover. Version is taken from node_modules/@lelantos-org/circuits/package.json.
+# Idempotent — skips when ./circuits/.version matches. Stack.up() also runs it.
+fetch-circuits:
+    cd "{{ROOT}}" && ./scripts/fetch-circuits.sh
+
 # best-effort cleanup of any leaked containers from a kill -9 path
 down:
     docker container prune -f >/dev/null

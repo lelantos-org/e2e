@@ -1,7 +1,3 @@
-// Declarative service specs for the e2e stack. One row per container,
-// one helper to start a row. Adding/changing a service is a data edit —
-// the imperative orchestration in stack.ts stays small.
-
 import { createWriteStream, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -13,51 +9,37 @@ import {
     type WaitStrategy,
 } from "testcontainers";
 
-import { RELAYER } from "./accounts";
+import { RELAYER } from "./accounts.js";
 import {
     ANVIL_RPC_INTERNAL,
     BASE_RUST_ENV,
     CHAIN_ID,
+    CIRCUITS_DIR,
     CONFIG_DIR,
     DB_URL,
     DEFAULT_STARTUP_MS,
     FEE_BPS,
     PORT,
-} from "./constants";
-import type { SwapAddresses } from "./stack";
+} from "./constants.js";
+import type { SwapAddresses } from "./stack.js";
 
-// ──────────────────────────────────────────────────────────────────────
-// Spec shape
-// ──────────────────────────────────────────────────────────────────────
-
-export interface MountSpec {
-    /// File name under e2e/config/ (resolved into an absolute path).
-    configFile: string;
-    /// Path inside the container.
-    target: string;
-}
+// `configFile` resolves against CONFIG_DIR (config file bind mount).
+// `hostPath` is an absolute host path (used for directory mounts like circuits).
+export type MountSpec =
+    | { configFile: string; target: string }
+    | { hostPath: string; target: string };
 
 export interface ServiceSpec {
     image: string;
-    /// Network alias other services use to reach this one (e.g. `postgres`,
-    /// `anvil`, `relayer`).
     alias: string;
     env?: Record<string, string>;
-    /// Optional shell-style entrypoint + command (anvil overrides ENTRYPOINT).
     entrypoint?: string[];
     command?: string[];
-    /// Read-only bind mounts; `source` resolved against `e2e/config/`.
     mounts?: MountSpec[];
-    /// Internal port to expose to the host. `getMappedPort(port)` returns
-    /// the host-side ephemeral mapping.
     port?: number;
     wait: WaitStrategy;
     startupMs?: number;
 }
-
-// ──────────────────────────────────────────────────────────────────────
-// Infra: postgres + anvil
-// ──────────────────────────────────────────────────────────────────────
 
 export const POSTGRES: ServiceSpec = {
     image: "postgres:16-alpine",
@@ -68,8 +50,7 @@ export const POSTGRES: ServiceSpec = {
         POSTGRES_DB: "postgres",
     },
     port: PORT.POSTGRES,
-    // postgres logs `database system is ready to accept connections` once
-    // during init and again when fully online; wait for the second.
+    // postgres logs the ready line during init and again when fully online.
     wait: Wait.forLogMessage(/database system is ready to accept connections/, 2),
 };
 
@@ -91,11 +72,6 @@ export const ANVIL: ServiceSpec = {
     wait: Wait.forLogMessage(/Listening on 0\.0\.0\.0:8545/),
 };
 
-// ──────────────────────────────────────────────────────────────────────
-// Backend services. `masp` is the only deploy-time address backends
-// need; the rest live in their config TOMLs.
-// ──────────────────────────────────────────────────────────────────────
-
 export interface BackendServices {
     ingester: ServiceSpec;
     fmdIndexer: ServiceSpec;
@@ -103,7 +79,6 @@ export interface BackendServices {
     fmdWeb: ServiceSpec;
     explorerWeb: ServiceSpec;
     relayer: ServiceSpec;
-    /// Present iff the deploy phase produced swap addresses.
     metaquoter?: ServiceSpec;
 }
 
@@ -120,8 +95,7 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
                 [`INGESTER_CHAIN_${CHAIN_ID}_START_BLOCK`]: "0",
             },
             mounts: [{ configFile: "ingester.toml", target: "/etc/ingester.toml" }],
-            // Ingester owns the schema-creating migrations. Wait until they
-            // finish so concurrent backends don't race CREATE TYPE.
+            // Owns schema migrations; concurrent backends race CREATE TYPE if started early.
             wait: Wait.forLogMessage(/migrations complete/i),
         },
         fmdIndexer: {
@@ -165,11 +139,14 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
                     : {}),
                 RUST_LOG: "info",
             },
-            mounts: [{ configFile: "relayer.toml", target: "/etc/relayer.toml" }],
+            mounts: [
+                { configFile: "relayer.toml", target: "/etc/relayer.toml" },
+                { hostPath: CIRCUITS_DIR, target: "/circuits" },
+            ],
             port: PORT.RELAYER,
             wait: Wait.forListeningPorts(),
-            // Prover loads wasm/r1cs/zkey before binding 3003. Slow on CI.
-            startupMs: 240_000,
+            // Prover loads wasm/r1cs/zkey before binding; slow on CI.
+            startupMs: 90_000,
         },
     };
 
@@ -194,10 +171,6 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
     return services;
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Spec → running container
-// ──────────────────────────────────────────────────────────────────────
-
 export async function runService(
     spec: ServiceSpec,
     network: StartedNetwork,
@@ -214,15 +187,14 @@ export async function runService(
     if (spec.mounts) {
         c = c.withBindMounts(
             spec.mounts.map((m) => ({
-                source: resolve(CONFIG_DIR, m.configFile),
+                source: "hostPath" in m ? m.hostPath : resolve(CONFIG_DIR, m.configFile),
                 target: m.target,
                 mode: "ro" as const,
             })),
         );
     }
 
-    // Stream logs to /tmp/e2e-logs/<alias>.log so failures (where
-    // testcontainers reaps the container) still leave a trace.
+    // Container is reaped on failure; persist logs so traces survive.
     const logDir = process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
     mkdirSync(logDir, { recursive: true });
     const sink = createWriteStream(resolve(logDir, `${spec.alias}.log`), { flags: "a" });
