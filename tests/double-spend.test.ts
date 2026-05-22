@@ -5,7 +5,7 @@ import {
     ASSET,
     createTestWallet,
     type Harness,
-    POLL,
+    awaitOwn,
     setupHarness,
     TEST_NSK,
     withFee,
@@ -30,7 +30,7 @@ describe("double-spend rejection", () => {
 
     it("deposit funds alice's spendable note", async () => {
         const r = await alice.deposit({ amount: DEPOSIT_AMT, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
         expect(alice.balance(ASSET)).toBe(DEPOSIT_AMT);
 
         // Stale clone: same nsk, synced before the first transfer lands.
@@ -41,7 +41,7 @@ describe("double-spend rejection", () => {
 
     it("first transfer spends alice's note (succeeds)", async () => {
         const r = await alice.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
         expect(alice.balance(ASSET)).toBe(0n);
         // bob's local store is empty until awaitCommitments fires.
         expect(bob.balance(ASSET)).toBe(0n);

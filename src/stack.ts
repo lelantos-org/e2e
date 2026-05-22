@@ -74,15 +74,14 @@ export class Stack {
 
     async deploy(): Promise<Addresses> {
         const rpcUrl = this.rpcUrl();
-        const env: Record<string, string> = {
+        const baseEnv: Record<string, string> = {
             ...process.env as Record<string, string>,
             MASP_FEE_BPS: FEE_BPS.toString(),
-            SWAP_ENABLED: "true",
             // up() already pre-deployed Permit2; skip DeployTest's vm.getCode fallback.
             PERMIT2: CANONICAL_PERMIT2_ADDRESS,
         };
 
-        const { stdout } = await execFileAsync(
+        const { stdout: coreOut } = await execFileAsync(
             "forge",
             [
                 "script", "script/DeployTest.s.sol:DeployTest",
@@ -94,11 +93,41 @@ export class Stack {
             {
                 cwd: CONTRACTS_DIR,
                 maxBuffer: 64 * 1024 * 1024,
-                env,
+                env: baseEnv,
             },
         );
+        this.addresses = parseDeployOutput(coreOut);
 
-        this.addresses = parseDeployOutput(stdout);
+        // Run DeployTestSwap after core; reads MASP/PERMIT2/TOKEN_* from env.
+        // Skip when E2E_SKIP_SWAP=1 (lets non-swap suites run without the
+        // mock UniV3 stack).
+        if (process.env.E2E_SKIP_SWAP !== "1") {
+            const swapEnv: Record<string, string> = {
+                ...baseEnv,
+                MASP: this.addresses.masp,
+                PERMIT2: this.addresses.permit2,
+            };
+            for (const [id, addr] of Object.entries(this.addresses.tokens)) {
+                swapEnv[`TOKEN_${id}`] = addr;
+            }
+            const { stdout: swapOut } = await execFileAsync(
+                "forge",
+                [
+                    "script", "script/DeployTestSwap.s.sol:DeployTestSwap",
+                    "--rpc-url", rpcUrl,
+                    "--private-key", DEPLOYER.privateKey,
+                    "--broadcast",
+                    "--disable-code-size-limit",
+                ],
+                {
+                    cwd: CONTRACTS_DIR,
+                    maxBuffer: 64 * 1024 * 1024,
+                    env: swapEnv,
+                },
+            );
+            const swap = parseSwapOutput(swapOut);
+            this.addresses = { ...this.addresses, swap };
+        }
         return this.addresses;
     }
 
@@ -187,6 +216,23 @@ function hostUrl(c: StartedTestContainer, internalPort: number): string {
 async function ensureCircuits(): Promise<void> {
     log("fetching circuits…");
     await execFileAsync("scripts/fetch-circuits.sh", [], { cwd: E2E_DIR });
+}
+
+function parseSwapOutput(stdout: string): SwapAddresses {
+    const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
+    const re = /\b(UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
+    const found = new Map<string, string>();
+    for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
+    const need = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"];
+    for (const k of need) {
+        if (!found.has(k)) throw new Error(`swap deploy: missing ${k} in forge output:\n${stripped}`);
+    }
+    return {
+        univ3Quoter: found.get("UNIV3_QUOTER")!,
+        univ3Adapter: found.get("UNIV3_ADAPTER")!,
+        mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
+        wrapper: found.get("SWAP_WRAPPER")!,
+    };
 }
 
 function parseDeployOutput(stdout: string): Addresses {

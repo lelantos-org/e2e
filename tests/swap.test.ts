@@ -8,7 +8,8 @@ import {
     type Erc20Helpers,
     fundPayerForAsset,
     type Harness,
-    POLL,
+    awaitBalance,
+    awaitOwn,
     setupHarness,
     TEST_NSK,
     withFee,
@@ -56,7 +57,7 @@ describe("masp swap e2e", () => {
     // 105 covers a 100-unit swap (publicOut=100+fee=105).
     async function depositForSwap(amount: bigint) {
         const r = await alice.deposit({ amount, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
     }
 
     it("happy path: deposit asset 2 -> swap -> fresh asset 3 note", async () => {
@@ -81,8 +82,11 @@ describe("masp swap e2e", () => {
             wrapperAddress: s.wrapperAddress,
         });
 
-        // Relayer flushes the B-note asynchronously.
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        // Relayer flushes the B-note (assetOut) asynchronously via
+        // flushBatch. `r.ownCommitments` only contains leg-1 change notes
+        // (assetIn residual), so also poll for the assetOut balance.
+        await awaitOwn(alice, r);
+        await awaitBalance(alice, ASSET_OUT);
         expect(alice.balance(ASSET_OUT)).toBeGreaterThan(0n);
     }, 360_000);
 

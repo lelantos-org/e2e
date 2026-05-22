@@ -9,7 +9,7 @@ import {
     type Erc20Helpers,
     fundPayerForAsset,
     type Harness,
-    POLL,
+    awaitOwn,
     setupHarness,
     snapshotBalances,
     TEST_NSK,
@@ -66,7 +66,7 @@ describe("withdraw native ETH (WETH unwrap)", () => {
 
     it("deposit WETH (shield leg)", async () => {
         const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
         const cur = await snap();
         expect(cur.payerWeth - baseline.payerWeth).toBe(-(DEPOSIT_WETH_BASE + SHIELD_FEE));
         expect(cur.maspWeth - baseline.maspWeth).toBe(DEPOSIT_WETH_BASE + SHIELD_FEE);
@@ -80,7 +80,7 @@ describe("withdraw native ETH (WETH unwrap)", () => {
             amount: WITHDRAW_WETH,
             asset: ASSET_WETH,
         });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
 
         const cur = await snap();
         expect(cur.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);

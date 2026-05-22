@@ -9,7 +9,7 @@ import {
     type Erc20Helpers,
     fundPayerForAsset,
     type Harness,
-    POLL,
+    awaitOwn,
     setupHarness,
     snapshotBalances,
     TEST_NSK,
@@ -62,7 +62,7 @@ describe("multi-asset deposit + withdraw", () => {
 
     it("deposit 10 WETH", async () => {
         const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
         const cur = await snapshot(weth);
         expect(cur.payer - baselineWeth.payer).toBe(-(DEPOSIT_WETH_BASE + SHIELD_FEE_WETH));
         expect(cur.masp - baselineWeth.masp).toBe(DEPOSIT_WETH_BASE + SHIELD_FEE_WETH);
@@ -71,7 +71,7 @@ describe("multi-asset deposit + withdraw", () => {
 
     it("deposit 20 mDAI", async () => {
         const r = await alice.deposit({ amount: DEPOSIT_MDAI, asset: ASSET_MDAI });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
         const cur = await snapshot(mdai);
         expect(cur.payer - baselineMdai.payer).toBe(-(DEPOSIT_MDAI_BASE + SHIELD_FEE_MDAI));
         expect(cur.masp - baselineMdai.masp).toBe(DEPOSIT_MDAI_BASE + SHIELD_FEE_MDAI);
@@ -81,7 +81,7 @@ describe("multi-asset deposit + withdraw", () => {
     it("withdraw 5 WETH (recipient receives net of unshield fee)", async () => {
         const before = await snapshot(weth);
         const r = await alice.withdraw({ to: env.recipientAddress, amount: WITHDRAW_WETH, asset: ASSET_WETH });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
         const cur = await snapshot(weth);
         expect(cur.recipient - before.recipient).toBe(NET_WITHDRAW_WETH);
         expect(before.masp - cur.masp).toBe(NET_WITHDRAW_WETH);
@@ -90,7 +90,7 @@ describe("multi-asset deposit + withdraw", () => {
     it("withdraw 10 mDAI (recipient receives net of unshield fee)", async () => {
         const before = await snapshot(mdai);
         const r = await alice.withdraw({ to: env.recipientAddress, amount: WITHDRAW_MDAI, asset: ASSET_MDAI });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
         const cur = await snapshot(mdai);
         expect(cur.recipient - before.recipient).toBe(NET_WITHDRAW_MDAI);
         expect(before.masp - cur.masp).toBe(NET_WITHDRAW_MDAI);

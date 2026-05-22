@@ -5,7 +5,8 @@ import {
     ASSET,
     createTestWallet,
     type Harness,
-    POLL,
+    awaitOwn,
+    awaitRecipient,
     setupHarness,
     TEST_NSK,
     withFee,
@@ -31,9 +32,9 @@ describe("two-input merge transfer", () => {
 
     it("two deposits give alice two spendable notes", async () => {
         const a = await alice.deposit({ amount: DEPOSIT_A, asset: ASSET });
-        await alice.awaitCommitments(a.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, a);
         const b = await alice.deposit({ amount: DEPOSIT_B, asset: ASSET });
-        await alice.awaitCommitments(b.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, b);
         expect(alice.balance(ASSET)).toBe(TOTAL);
         expect(alice.notes({ asset: ASSET, spent: false }).length).toBe(2);
     }, 360_000);
@@ -44,8 +45,13 @@ describe("two-input merge transfer", () => {
         expect(inputNotesBefore.length).toBe(2);
 
         const r = await alice.transfer({ to: bob.address, amount: TOTAL, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
-        await bob.awaitCommitments(r.commitments, POLL.SPEND);
+        // alice spends everything → her ownCommitments is empty (no change),
+        // so just wait for cms to surface on-chain. bob waits on the
+        // recipient cm (the non-own subset).
+        if (r.ownCommitments.length > 0) {
+            await awaitOwn(alice, r);
+        }
+        await awaitRecipient(bob, r);
 
         for (const n of inputNotesBefore) {
             expect(alice.notes({ asset: ASSET, spent: true }).find((x) => x.cm === n.cm)).toBeDefined();

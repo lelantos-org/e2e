@@ -1,10 +1,9 @@
-import { ethers } from "ethers";
-
 import {
-    EthersChainAdapter,
+    type EthSigner,
     type Field,
     InMemoryNoteStore,
     nodeWallet,
+    ViemChainAdapter,
     type Wallet,
 } from "@lelantos-org/sdk";
 
@@ -13,9 +12,10 @@ import { TREE_DEPTH } from "./constants.js";
 import { env } from "./env.js";
 import type { Harness } from "./harness.js";
 import { PROVER_PATHS } from "./harness.js";
+import { payerEthSigner } from "./signers.js";
 
 export interface CreateWalletOpts {
-    signer?: ethers.Signer;
+    signer?: EthSigner;
     noteStore?: InMemoryNoteStore;
 }
 
@@ -36,12 +36,12 @@ export const TEST_NSK = {
 } as const;
 
 export async function createTestWallet(
-    h: Harness,
+    _h: Harness,
     nsk: Field,
     opts: CreateWalletOpts = {},
 ): Promise<Wallet> {
-    const signer = opts.signer ?? h.payer;
-    const chain = new EthersChainAdapter({
+    const signer = opts.signer ?? payerEthSigner();
+    const chain = new ViemChainAdapter({
         rpcUrl: env.rpcUrl,
         signer,
         maspAddress: env.maspAddress,

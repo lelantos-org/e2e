@@ -17,6 +17,7 @@ import { RELAYER } from "./accounts.js";
 import { ASSET, MASP_ABI, MASP_INTENT_ABI, TIMEOUT, TREE_DEPTH } from "./constants.js";
 import { env } from "./env.js";
 import { type Erc20Helpers, ExplorerClient, setupErc20, setupWeth } from "./scenario.js";
+import { payerEthSigner } from "./signers.js";
 import { counter, pollUntil } from "./utils.js";
 
 const resolve = createRequire(import.meta.url).resolve;
@@ -34,7 +35,7 @@ export interface Harness {
     P: Poseidon;
     J: Jubjub;
     provider: ethers.JsonRpcProvider;
-    payer: ethers.NonceManager;
+    payer: ethers.Wallet;
     masp: ethers.Contract;
     relayer: RelayerClient;
     fmd: FmdClient;
@@ -85,9 +86,11 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
     const provider = new ethers.JsonRpcProvider(env.rpcUrl);
     // Vitest reuses one anvil; flush so file N's nonce query is not stale.
     await flushMempool(provider);
-    // NonceManager: back-to-back sends (mint→approve) must not race anvil's
-    // `pending` counter. SDK Wallet shares this instance via createTestWallet.
-    const payer = new ethers.NonceManager(new ethers.Wallet(env.payerKey, provider));
+    // Plain ethers.Wallet — fetches `pending` nonce from anvil on every send.
+    // We can't use NonceManager here because SDK 0.5's viem PrivateKeySigner
+    // independently sends txs from the same account; cached NonceManager
+    // diverges from chain state and trips "nonce too low".
+    const payer = new ethers.Wallet(env.payerKey, provider);
     const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
     const relayer = new RelayerClient(env.relayerUrl);
     const fmd = new FmdClient(env.fmdUrl, env.chainId);
@@ -150,7 +153,7 @@ export interface SubmitIntentResult {
 // Bypasses SDK Wallet: used by negative tests that need malformed inputs and
 // by batch-flush which fires N submits without waiting for cm indexation.
 export async function submitIntentDirect(args: {
-    payer: ethers.NonceManager;
+    payer: ethers.Signer;
     intent: DepositIntent;
     aux: [AuxOutput, AuxOutput];
     tokenAddr: string;
@@ -161,8 +164,11 @@ export async function submitIntentDirect(args: {
     const piHash = computePiHash(intent, aux);
     const nonce = BigInt(Date.now()) << 8n;
     const deadline = args.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 3600);
+    // SDK 0.5 `signPermit2Witness` takes a viem-shaped `EthSigner`. Use
+    // the shared PAYER signer (memoised); tx broadcast still goes through
+    // the ethers `payer` below.
     const sig = await signPermit2Witness({
-        signer: payer,
+        signer: payerEthSigner(),
         chainId: env.chainId,
         spender: env.maspAddress,
         token: tokenAddr,
@@ -277,12 +283,14 @@ export {
 // Local re-exports.
 export {
     ASSET, ASSETS, baseAmt, DEAD_ADDRESS, FEE_BPS, feeFor, MASP_ABI, POLL,
-    scaleFor, TIMEOUT, withFee,
+    type PollOpts, scaleFor, TIMEOUT, withFee,
 } from "./constants.js";
 export {
     type Erc20Helpers, ExplorerClient, expectBalanceDeltas, inputSlotFor,
-    makeWallet, noteFor, rngForOutput, setupErc20, setupWeth, snapshotBalances,
-    type TestWallet, waitForAdvance, waitForCm,
+    makeWallet, noteFor, recipientCommitments, rngForOutput, setupErc20, setupWeth,
+    snapshotBalances, type TestWallet, waitForAdvance, waitForCm,
 } from "./scenario.js";
+export { payerEthSigner } from "./signers.js";
 export { cmToHex, counter, expectRevert, nfToHex, pollUntil } from "./utils.js";
+export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";
 export { createTestWallet, TEST_NSK } from "./wallet.js";

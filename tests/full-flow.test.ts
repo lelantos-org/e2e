@@ -14,7 +14,8 @@ import {
     fundPayerForAsset,
     type Harness,
     newAuxRng,
-    POLL,
+    awaitOwn,
+    awaitRecipient,
     setupHarness,
     submitIntentDirect,
     TEST_NSK,
@@ -56,7 +57,7 @@ describe("masp e2e flow", () => {
             asset: ASSET,
             onPhase: (p) => phases.push(p),
         });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
         expect(phases).toEqual(["signing", "submitting", "broadcast", "mined"]);
 
         const moved = baseAmt(105n) + feeFor(105n);
@@ -77,8 +78,8 @@ describe("masp e2e flow", () => {
             asset: ASSET,
             onPhase: (p) => phases.push(p),
         });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
-        await bob.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
+        await awaitRecipient(bob, r);
         expect(phases).toEqual(["preparing", "proving", "submitting"]);
 
         await expectBalanceDeltas(erc20, addrs, before, { payer: 0n, masp: 0n, recipient: 0n });
@@ -94,7 +95,7 @@ describe("masp e2e flow", () => {
 
         // SDK `amount` is net-to-recipient; publicOut = amount + fee.
         const r = await alice.withdraw({ to: env.recipientAddress, amount: 40n, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.SPEND);
+        await awaitOwn(alice, r);
 
         // Contract fee is on publicOut*scale: recipient = publicOut*scale*(1-feeBps).
         const publicOutBase = baseAmt(42n);

@@ -56,7 +56,7 @@ export async function quoteSwap(
 }
 
 export async function setMockQuote(
-    payer: ethers.NonceManager,
+    payer: ethers.Signer,
     s: SwapHarness,
     args: { tokenIn: string; tokenOut: string; fee: number; amountOut: bigint; gasEstimate: bigint },
 ): Promise<void> {
@@ -65,7 +65,7 @@ export async function setMockQuote(
 }
 
 export async function setMockNextOut(
-    payer: ethers.NonceManager,
+    payer: ethers.Signer,
     s: SwapHarness,
     nextOut: bigint,
 ): Promise<void> {

@@ -118,6 +118,14 @@ function failure(reason: string, err: Error): Error {
     return new Error(`expectRevert: ${reason}${err.message ? ` (${err.message})` : ""}`);
 }
 
+// Hand-mapped revert selectors → readable names. Used so expectRevert regexes
+// can match on the error name when ethers v6 surfaces the raw `data` from a
+// sub-call (e.g. Permit2's `SignatureExpired`) without decoding it.
+const KNOWN_SELECTORS: Record<string, string> = {
+    "0xcd21db4f": "SignatureExpired(deadline)",
+    "0xcc34802d": "MustHaveDeposit()",
+};
+
 function collectMessage(e: Error): string {
     const parts: string[] = [];
     let cur: Error | undefined = e;
@@ -126,8 +134,21 @@ function collectMessage(e: Error): string {
         for (const v of [c.message, c.reason, c.shortMessage]) {
             if (typeof v === "string") parts.push(v);
         }
-        if (typeof c.data === "string") parts.push(c.data);
+        if (typeof c.data === "string") {
+            parts.push(c.data);
+            const sel = c.data.slice(0, 10).toLowerCase();
+            const name = KNOWN_SELECTORS[sel];
+            if (name) parts.push(name);
+        }
         cur = c.cause instanceof Error ? c.cause : undefined;
+    }
+    // Also probe top-level message for embedded selectors (ethers v6 surfaces
+    // these in the formatted message body but doesn't expose a `data` field).
+    const joined = parts.join(" || ");
+    for (const [sel, name] of Object.entries(KNOWN_SELECTORS)) {
+        if (joined.toLowerCase().includes(sel) && !joined.includes(name)) {
+            parts.push(name);
+        }
     }
     return parts.join(" || ");
 }

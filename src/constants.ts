@@ -36,11 +36,17 @@ export const TIMEOUT = {
     BATCH_FLUSH_TEST_MS: 240_000,
 } as const;
 
-export const POLL = {
-    COMMITMENT:   { maxAttempts: 80, pollMs: 2000 },
-    SPEND:        { maxAttempts: 60, pollMs: 1500 },
-    ROOT_ADVANCE: { maxAttempts: 60, pollMs: 2500 },
-    RELAYER_TX:   { maxAttempts: 60, pollMs: 2500 },
+export interface PollOpts {
+    maxAttempts: number;
+    pollMs: number;
+}
+
+/// Picked by `awaitOwn`/`awaitRecipient` based on the tx kind. Override
+/// per-call by passing a `PollOpts` to either helper. `COMMITMENT` covers
+/// the relayer flush window (slow); `SPEND` is the spend pipeline path.
+export const POLL: Record<"COMMITMENT" | "SPEND", PollOpts> = {
+    COMMITMENT: { maxAttempts: 80, pollMs: 2000 },
+    SPEND:      { maxAttempts: 60, pollMs: 1500 },
 } as const;
 
 // Must match `circuits/2x2.circom` `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
@@ -124,7 +130,9 @@ export const MASP_INTENT_ABI = [
     "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm,uint256[2] cvDep0,uint256[2] cvDep1,uint256 rcvTotal) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
     "function cancelIntent(uint256 id)",
     "function cancelDelay() view returns (uint32)",
-    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, bytes32 cm0, bytes32 cm1, uint256 cvDep0X, uint256 cvDep0Y, uint256 cvDep1X, uint256 cvDep1Y, uint256 rcvTotal, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
+    "error SignatureExpired(uint256 signatureDeadline)",
+    "error MustHaveDeposit()",
+    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm0, bytes32 cm1, uint256 cvDep0X, uint256 cvDep0Y, uint256 cvDep1X, uint256 cvDep1Y, uint256 rcvTotal, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
     "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
 ] as const;
 

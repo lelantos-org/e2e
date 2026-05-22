@@ -86,7 +86,7 @@ function erc20Helpers(c: ethers.Contract): Erc20Helpers {
 }
 
 export async function setupErc20(
-    payer: ethers.NonceManager,
+    payer: ethers.Signer,
     tokenAddr: string,
     spender: string,
     initialMint: bigint,
@@ -98,7 +98,7 @@ export async function setupErc20(
 }
 
 export async function setupWeth(
-    payer: ethers.NonceManager,
+    payer: ethers.Signer,
     wethAddr: string,
     spender: string,
     amount: bigint,
@@ -138,6 +138,20 @@ export async function snapshotBalances(
         out[name] = await token.balanceOf(addr);
     }
     return out;
+}
+
+// Commitments the originator's wallet won't scan (zero-pad outputs in
+// deposit/withdraw, recipient's note in non-self transfer). Use for the
+// receiver-side `awaitCommitments` call in tests; sender-side waits should
+// pass `r.ownCommitments` directly.
+export function recipientCommitments(r: {
+    commitments: readonly string[];
+    nonZeroCommitments?: readonly string[];
+    ownCommitments?: readonly string[];
+}): string[] {
+    const own = new Set(r.ownCommitments ?? []);
+    const pool = r.nonZeroCommitments ?? r.commitments;
+    return pool.filter((c) => !own.has(c));
 }
 
 export async function expectBalanceDeltas(

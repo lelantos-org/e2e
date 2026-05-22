@@ -11,12 +11,13 @@
     "urls": "tsx src/orchestrate.ts urls"
   },
   "dependencies": {
-    "@lelantos-org/circuits": "^0.4.3",
-    "@lelantos-org/sdk": "^0.4.1",
+    "@lelantos-org/circuits": "^0.6.4",
+    "@lelantos-org/sdk": "^0.5.4",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",
-    "testcontainers": "^10.13.0"
+    "testcontainers": "^10.13.0",
+    "viem": "^2.49.3"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

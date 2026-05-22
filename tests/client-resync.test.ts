@@ -5,7 +5,7 @@ import {
     ASSET,
     createTestWallet,
     type Harness,
-    POLL,
+    awaitOwn,
     setupHarness,
     TEST_NSK,
     withFee,
@@ -33,16 +33,16 @@ describe("cold-client resync", () => {
 
     it("activity sequence: 2 deposits + 2 transfers to bob", async () => {
         const d1 = await alice.deposit({ amount: DEPOSIT_1, asset: ASSET });
-        await alice.awaitCommitments(d1.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, d1);
 
         const t1 = await alice.transfer({ to: bob.address, amount: TO_BOB_1, asset: ASSET });
-        await alice.awaitCommitments(t1.commitments, POLL.SPEND);
+        await awaitOwn(alice, t1);
 
         const d2 = await alice.deposit({ amount: DEPOSIT_2, asset: ASSET });
-        await alice.awaitCommitments(d2.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, d2);
 
         const t2 = await alice.transfer({ to: bob.address, amount: TO_BOB_2, asset: ASSET });
-        await alice.awaitCommitments(t2.commitments, POLL.SPEND);
+        await awaitOwn(alice, t2);
     }, 600_000);
 
     it("fresh wallet reconstructs bob's balance from scratch", async () => {

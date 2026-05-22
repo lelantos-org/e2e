@@ -4,7 +4,7 @@ import {
     ASSET,
     createTestWallet,
     type Harness,
-    POLL,
+    awaitOwn,
     setupHarness,
     TEST_NSK,
     withFee,
@@ -28,7 +28,7 @@ describe("edge: concurrent spends of one note", () => {
 
     it("only one of two parallel spends of the same note succeeds", async () => {
         const r = await alice.deposit({ amount: DEPOSIT, asset: ASSET });
-        await alice.awaitCommitments(r.commitments, POLL.COMMITMENT);
+        await awaitOwn(alice, r);
 
         // Coin selector picks the same input twice; second to hit `spent[nf]` reverts.
         const results = await Promise.allSettled([

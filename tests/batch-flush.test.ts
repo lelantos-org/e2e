@@ -49,9 +49,12 @@ describe("batch flush", () => {
         const startBlock = await h.provider.getBlockNumber();
 
         // submitIntentDirect awaits its own receipt only; relayer flush is async.
-        const submitted: { intentId: bigint; cm0: Field }[] = [];
-        for (let i = 0; i < N; i++) {
-            const built = buildDeposit({
+        // Build all N witnesses up-front (rng draws must stay sequential), then
+        // fire submits in parallel so all N IntentEscrowed land before the
+        // next 5s flush tick — otherwise the relayer drains them across
+        // multiple batches and the "single flushBatch" assertion fails.
+        const builts = Array.from({ length: N }, () =>
+            buildDeposit({
                 ...h.bundleCommon(),
                 publicIn: DEPOSIT_AMT,
                 recipient: alice.recipient,
@@ -63,16 +66,24 @@ describe("batch flush", () => {
                     aux: rngForOutput(auxRng),
                 },
                 output1Pad: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng() },
-            });
-            const r = await submitIntentDirect({
-                payer: h.payer,
-                intent: built.intent,
-                aux: built.aux,
-                tokenAddr: env.token2,
-                maxTotal: withFee(DEPOSIT_AMT),
-            });
-            submitted.push({ intentId: r.intentId, cm0: built.cm[0] });
-        }
+            }),
+        );
+        // Wrap h.payer in a per-test NonceManager so the N parallel sends
+        // get distinct nonces without racing chain.getTransactionCount.
+        // (h.payer itself is a plain Wallet — see harness.ts for why.)
+        const noncedPayer = new ethers.NonceManager(h.payer);
+        const results = await Promise.all(
+            builts.map((built) =>
+                submitIntentDirect({
+                    payer: noncedPayer,
+                    intent: built.intent,
+                    aux: built.aux,
+                    tokenAddr: env.token2,
+                    maxTotal: withFee(DEPOSIT_AMT),
+                }),
+            ),
+        );
+        const submitted = results.map((r, i) => ({ intentId: r.intentId, cm0: builts[i].cm[0] }));
 
         const masp = new ethers.Contract(env.maspAddress, MASP_ABI, h.provider);
         const wantedIds = submitted.map((s) => s.intentId);
