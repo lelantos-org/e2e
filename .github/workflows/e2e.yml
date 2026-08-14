@@ -109,20 +109,54 @@ jobs:
 
       - name: Verify vkeys match committed verifier sols
         run: |
-          set -euo pipefail
-          npx --yes snarkjs@0.7.5 zkey export solidityverifier \
-            vendor/circuits/build/tree_update_batch_final.zkey /tmp/tubv.sol
-          npx --yes snarkjs@0.7.5 zkey export solidityverifier \
-            vendor/circuits/build/3x3_final.zkey /tmp/v.sol
+          set -uo pipefail
 
-          # Strip the `contract <Name> {` line; everything else (alpha/beta/
-          # gamma/delta/IC constants) must match byte-for-byte.
-          norm() { grep -vE '^contract [A-Za-z0-9_]+ \{' "$1"; }
-          diff <(norm /tmp/tubv.sol) <(norm vendor/contracts/src/verifiers/TreeUpdateBatchVerifier.sol) \
-            || { echo "::error::TreeUpdateBatchVerifier.sol vkey != tree_update_batch_final.zkey vkey"; exit 1; }
-          diff <(norm /tmp/v.sol) <(norm vendor/contracts/src/verifiers/Verifier.sol) \
-            || { echo "::error::Verifier.sol vkey != 3x3_final.zkey vkey"; exit 1; }
-          echo "vkeys match committed verifier sols"
+          # `uint256 constant <name> = <value>;` pairs — the vkey itself. The
+          # rest of the file is snarkjs boilerplate, identical across patch
+          # versions, and the `contract <Name> {` line differs by design
+          # because the committed contracts are renamed.
+          consts() {
+            sed -nE 's/^[[:space:]]*uint256 constant ([A-Za-z0-9_]+) = ([0-9]+);.*/\1 \2/p' "$1"
+          }
+
+          # Names whose values differ, or that the committed sol adds. Which
+          # constants differ is the diagnosis: `delta*` and `IC*` alone mean a
+          # different phase-2 contribution, a changed `IC*` count means a
+          # different circuit. The values are 77-digit numbers and say nothing
+          # in a log.
+          mismatched() {
+            awk 'NR==FNR { a[$1] = $2; next }
+                 { if (!($1 in a) || a[$1] != $2) print $1 }' <(consts "$1") <(consts "$2")
+          }
+
+          check() {
+            local zkey=$1 sol=$2 label=$3
+            # Per-label output file, and the export is checked: on failure a
+            # shared or stale file would be compared instead, reporting a vkey
+            # mismatch for what is really a missing or corrupt zkey.
+            local gen=/tmp/verifier-$label.sol
+            if ! npx --yes snarkjs@0.7.5 zkey export solidityverifier "$zkey" "$gen" >/dev/null; then
+              echo "::error::$label: could not export a verifier from $zkey"
+              return 1
+            fi
+            local bad
+            bad=$(mismatched "$gen" "$sol")
+            if [ -z "$bad" ]; then
+              echo "$label: vkey matches $(basename "$sol")"
+              return 0
+            fi
+            echo "::error::$label: $sol vkey != $(basename "$zkey") vkey"
+            echo "  differing constants: $(echo "$bad" | tr '\n' ' ')"
+            return 1
+          }
+
+          # Both are checked before failing, so one run reports every mismatch.
+          rc=0
+          check vendor/circuits/build/tree_update_batch_final.zkey \
+                vendor/contracts/src/verifiers/TreeUpdateBatchVerifier.sol tree_update_batch || rc=1
+          check vendor/circuits/build/3x3_final.zkey \
+                vendor/contracts/src/verifiers/Verifier.sol 3x3 || rc=1
+          exit $rc
 
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
