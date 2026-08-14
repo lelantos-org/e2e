@@ -82,7 +82,11 @@ export interface BackendServices {
     metaquoter?: ServiceSpec;
 }
 
-export function backendSpecs(masp: string, swap?: SwapAddresses): BackendServices {
+export function backendSpecs(
+    masp: string,
+    swap?: SwapAddresses,
+    nativeAdapter?: string,
+): BackendServices {
     const services: BackendServices = {
         ingester: {
             image: "lelantos/ingester:dev",
@@ -102,14 +106,19 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
             image: "lelantos/fmd-indexer:dev",
             alias: "fmd-indexer",
             env: BASE_RUST_ENV,
-            wait: Wait.forLogMessage(/tick driver started|ready/i),
+            // Exact line from `crates/fmd-indexer/src/main.rs`, emitted once
+            // the config is loaded and the DB pool is built. Not `/ready/i` —
+            // that matched any startup line containing the word and could
+            // declare the container up before it had a database connection.
+            wait: Wait.forLogMessage(/fmd-indexer ready/),
         },
         explorerIndexer: {
             image: "lelantos/explorer-indexer:dev",
             alias: "explorer-indexer",
             env: { ...BASE_RUST_ENV, EXPLORER_INDEXER_CONFIG: "/etc/explorer-indexer.toml" },
             mounts: [{ configFile: "explorer-indexer.toml", target: "/etc/explorer-indexer.toml" }],
-            wait: Wait.forLogMessage(/tick driver started|ready/i),
+            // `crates/explorer-indexer/src/main.rs`, after the pool is built.
+            wait: Wait.forLogMessage(/explorer-indexer ready/),
         },
         fmdWeb: {
             image: "lelantos/fmd-webserver:dev",
@@ -137,6 +146,11 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
                 ...(swap
                     ? { [`RELAYER_CHAIN_${CHAIN_ID}_SWAP_WRAPPER_ADDRESS`]: swap.wrapper }
                     : {}),
+                // Without it the relayer rejects `withdrawNative` payloads:
+                // the pool is ERC-20 only, so the unwrap has no entry point.
+                ...(nativeAdapter
+                    ? { [`RELAYER_CHAIN_${CHAIN_ID}_NATIVE_ADAPTER_ADDRESS`]: nativeAdapter }
+                    : {}),
                 RUST_LOG: "info",
             },
             mounts: [
@@ -144,8 +158,13 @@ export function backendSpecs(masp: string, swap?: SwapAddresses): BackendService
                 { hostPath: CIRCUITS_DIR, target: "/circuits" },
             ],
             port: PORT.RELAYER,
-            wait: Wait.forListeningPorts(),
-            // Prover loads wasm/r1cs/zkey before binding; slow on CI.
+            // `crates/relayer/src/main.rs` logs this only after the ark-circom
+            // prover has finished loading wasm/r1cs/zkey. Strictly stronger
+            // than `forListeningPorts()`: a relayer whose prover is still
+            // warming accepts connections but stalls the first submit, which
+            // surfaces much later as an unexplained `awaitOwn` timeout.
+            wait: Wait.forLogMessage(/relayer listening/),
+            // Prover load is slow on CI.
             startupMs: 90_000,
         },
     };

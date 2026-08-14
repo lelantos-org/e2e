@@ -1,12 +1,13 @@
-import type { AuxOutput, DepositIntent, InputSlot } from "@lelantos-org/sdk";
+import type { AuxOutput, DepositRequest, InputSlot } from "@lelantos-org/sdk";
 
-// Flip one bit so `verifyProof`'s pairing fails.
-export function mutateOutCm(intent: DepositIntent): DepositIntent {
-    const [c0, c1] = intent.outCm;
-    const bytes = c0.startsWith("0x") ? c0.slice(2) : c0;
+// Flip one bit so `verifyProof`'s pairing fails. A deposit occupies one leaf,
+// so `outCm` is a single commitment rather than the old pair.
+export function mutateOutCm(request: DepositRequest): DepositRequest {
+    const cm = request.outCm;
+    const bytes = cm.startsWith("0x") ? cm.slice(2) : cm;
     const head = bytes.slice(0, -2);
     const tail = parseInt(bytes.slice(-2), 16) ^ 0x01;
-    return { ...intent, outCm: ["0x" + head + tail.toString(16).padStart(2, "0"), c1] };
+    return { ...request, outCm: "0x" + head + tail.toString(16).padStart(2, "0") };
 }
 
 // Zero-sibling path yields a root absent from MASP's known-root set.

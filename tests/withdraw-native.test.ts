@@ -1,79 +1,71 @@
-import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { baseAmt, feeFor } from "../src/constants.js";
 import { env } from "../src/env.js";
 import {
+    accruedFee,
+    amt,
     ASSETS,
-    createTestWallet,
-    type Erc20Helpers,
-    fundPayerForAsset,
-    type Harness,
     awaitOwn,
-    setupHarness,
+    baseAmt,
+    feeFor,
+    type Erc20Helpers,
+    type Harness,
     snapshotBalances,
     TEST_NSK,
+    TEST_TIMEOUT,
     withFee,
 } from "../src/harness.js";
+import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.withdrawNative;
 const ASSET_WETH = ASSETS.WETH;
-const DEPOSIT_WETH = 20n;
-const WITHDRAW_WETH = 8n;
+const DEPOSIT_WETH = amt(20n);
+const WITHDRAW_WETH = amt(8n);
 
-const DEPOSIT_WETH_BASE = baseAmt(DEPOSIT_WETH, ASSET_WETH);
-const WITHDRAW_WETH_BASE = baseAmt(WITHDRAW_WETH, ASSET_WETH);
 const SHIELD_FEE = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const UNSHIELD_FEE = feeFor(WITHDRAW_WETH, ASSET_WETH);
 // SDK fee rounds to 0 at this magnitude, so publicOut == WITHDRAW_WETH.
-const NET_WITHDRAW = WITHDRAW_WETH_BASE - UNSHIELD_FEE;
+const NET_WITHDRAW = baseAmt(WITHDRAW_WETH, ASSET_WETH) - UNSHIELD_FEE;
 
 interface Snapshot {
-    payerWeth: bigint;
-    maspWeth: bigint;
-    recipientWeth: bigint;
+    weth: Record<string, bigint>;
     recipientEth: bigint;
 }
 
 describe("withdraw native ETH (WETH unwrap)", () => {
     let h: Harness;
-    let alice: Awaited<ReturnType<typeof createTestWallet>>;
+    let alice: SdkWallet;
     let weth: Erc20Helpers;
-    let baseline: Snapshot;
 
-    const WETH_ADDRS = {
-        payer: env.payerAddress,
-        masp: env.maspAddress,
-        recipient: env.recipientAddress,
-    };
-
+    /// WETH balances for the tracked accounts plus the recipient's raw ETH —
+    /// the whole point of this path is that value arrives as coin, not token,
+    /// so both sides have to be observed in the same snapshot.
     async function snap(): Promise<Snapshot> {
-        const w = await snapshotBalances(weth, WETH_ADDRS);
         return {
-            payerWeth: w.payer,
-            maspWeth: w.masp,
-            recipientWeth: w.recipient,
+            weth: await snapshotBalances(weth),
             recipientEth: await h.provider.getBalance(env.recipientAddress),
         };
     }
 
     beforeAll(async () => {
-        h = await setupHarness();
-        weth = await fundPayerForAsset(h, ASSET_WETH, withFee(DEPOSIT_WETH, ASSET_WETH));
-        alice = await createTestWallet(h, ALICE_NSK);
-        baseline = await snap();
+        const f = await setupFile({
+            nsks: TEST_NSK.withdrawNative,
+            fund: [{ asset: ASSET_WETH, amount: withFee(DEPOSIT_WETH, ASSET_WETH) }],
+        });
+        ({ h } = f);
+        ({ alice } = f.w);
+        weth = f.token(ASSET_WETH);
     });
 
-    it("deposit WETH (shield leg)", async () => {
+    const deposited = once(async () => {
+        const before = await snap();
         const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
         await awaitOwn(alice, r);
-        const cur = await snap();
-        expect(cur.payerWeth - baseline.payerWeth).toBe(-(DEPOSIT_WETH_BASE + SHIELD_FEE));
-        expect(cur.maspWeth - baseline.maspWeth).toBe(DEPOSIT_WETH_BASE + SHIELD_FEE);
-        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
-    }, 240_000);
+        return { before, after: await snap() };
+    });
 
-    it("withdrawEth — recipient receives raw ETH (no WETH delta)", async () => {
+    const withdrawn = once(async () => {
+        await deposited();
         const before = await snap();
         const r = await alice.withdrawEth({
             to: env.recipientAddress,
@@ -81,19 +73,29 @@ describe("withdraw native ETH (WETH unwrap)", () => {
             asset: ASSET_WETH,
         });
         await awaitOwn(alice, r);
+        return { before, after: await snap() };
+    });
 
-        const cur = await snap();
-        expect(cur.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);
-        expect(cur.recipientWeth - before.recipientWeth).toBe(0n);
-        expect(before.maspWeth - cur.maspWeth).toBe(NET_WITHDRAW);
+    it("deposit WETH (shield leg)", async () => {
+        const { before, after } = await deposited();
+        const moved = baseAmt(DEPOSIT_WETH, ASSET_WETH) + SHIELD_FEE;
+        expect(after.weth.payer - before.weth.payer).toBe(-moved);
+        expect(after.weth.masp - before.weth.masp).toBe(moved);
+        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
+    }, TEST_TIMEOUT.SPEND);
+
+    it("withdrawEth — recipient receives raw ETH (no WETH delta)", async () => {
+        const { before, after } = await withdrawn();
+        expect(after.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);
+        expect(after.weth.recipient - before.weth.recipient, "arrives as coin, not token").toBe(0n);
+        expect(before.weth.masp - after.weth.masp).toBe(NET_WITHDRAW);
         expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH);
-    }, 240_000);
+    }, TEST_TIMEOUT.SPEND);
 
     it("MASP accrues shield + unshield fees in WETH", async () => {
-        const masp = new ethers.Contract(env.maspAddress, [
-            "function accruedFee(address) view returns (uint256)",
-        ], h.provider);
-        const accrued = (await masp.accruedFee(env.token1)) as bigint;
-        expect(accrued).toBeGreaterThanOrEqual(SHIELD_FEE + UNSHIELD_FEE);
-    });
+        await withdrawn();
+        // Lower bound: cumulative counter on a shared MASP.
+        expect(await accruedFee(h.provider, env.token1))
+            .toBeGreaterThanOrEqual(SHIELD_FEE + UNSHIELD_FEE);
+    }, TEST_TIMEOUT.SPEND);
 });

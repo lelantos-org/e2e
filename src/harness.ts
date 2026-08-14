@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 import {
     type AuxOutput,
     computePiHash,
-    type DepositIntent,
+    type DepositRequest,
     FmdClient,
     Jubjub,
     Poseidon,
@@ -14,7 +14,7 @@ import {
 } from "@lelantos-org/sdk";
 
 import { RELAYER } from "./accounts.js";
-import { ASSET, MASP_ABI, MASP_INTENT_ABI, TIMEOUT, TREE_DEPTH } from "./constants.js";
+import { ASSET, MASP_ABI, MASP_DEPOSIT_ABI, TIMEOUT, TREE_DEPTH } from "./constants.js";
 import { env } from "./env.js";
 import { type Erc20Helpers, ExplorerClient, setupErc20, setupWeth } from "./scenario.js";
 import { payerEthSigner } from "./signers.js";
@@ -22,8 +22,8 @@ import { counter, pollUntil } from "./utils.js";
 
 const resolve = createRequire(import.meta.url).resolve;
 export const PROVER_PATHS = {
-    wasmPath: resolve("@lelantos-org/circuits/2x2/2x2.wasm"),
-    zkeyPath: resolve("@lelantos-org/circuits/2x2/2x2_final.zkey"),
+    wasmPath: resolve("@lelantos-org/circuits/3x3/3x3.wasm"),
+    zkeyPath: resolve("@lelantos-org/circuits/3x3/3x3_final.zkey"),
 };
 
 // Test files should pass a file-unique seed; cross-file collisions produce
@@ -61,10 +61,13 @@ export interface SetupOpts {
 let _P: Promise<Poseidon> | undefined;
 let _J: Promise<Jubjub> | undefined;
 
+// Mirrors the asset registry fixture the stack deploys. `weth` is the only
+// wrapped-native entry; the rest are plain mocks with a public `mint`.
 export function tokenAddressFor(asset: bigint): { address: string; kind: "erc20" | "weth" } {
     switch (asset) {
         case 1n: return { address: env.token1, kind: "weth" };
         case 2n: return { address: env.token2, kind: "erc20" };
+        case 3n: return { address: env.token3, kind: "erc20" };
         default: throw new Error(`tokenAddressFor: unknown asset id ${asset}`);
     }
 }
@@ -87,7 +90,7 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
     // Vitest reuses one anvil; flush so file N's nonce query is not stale.
     await flushMempool(provider);
     // Plain ethers.Wallet — fetches `pending` nonce from anvil on every send.
-    // We can't use NonceManager here because SDK 0.5's viem PrivateKeySigner
+    // We can't use NonceManager here because the SDK's viem PrivateKeySigner
     // independently sends txs from the same account; cached NonceManager
     // diverges from chain state and trips "nonce too low".
     const payer = new ethers.Wallet(env.payerKey, provider);
@@ -145,28 +148,42 @@ export async function waitForFmdHealth(): Promise<void> {
     );
 }
 
-export interface SubmitIntentResult {
+export interface SubmitDepositResult {
     txHash: string;
-    intentId: bigint;
+    depositId: bigint;
 }
 
 // Bypasses SDK Wallet: used by negative tests that need malformed inputs and
 // by batch-flush which fires N submits without waiting for cm indexation.
-export async function submitIntentDirect(args: {
+/// Fresh Permit2 nonce, unique per call.
+///
+/// Permit2 nonces are an unordered bitmap: any unused value works, but a
+/// repeat reverts `InvalidNonce()`. Deriving one from `Date.now()` alone
+/// collides whenever two deposits are signed inside the same millisecond —
+/// which is exactly what `batch-flush` does when it fires N submits through
+/// `Promise.all`, so it failed only sometimes. The counter makes it
+/// deterministic; the timestamp seed keeps separate runs against the same
+/// anvil from reusing each other's slots.
+let permit2Nonce = BigInt(Date.now()) << 8n;
+function nextPermit2Nonce(): bigint {
+    return permit2Nonce++;
+}
+
+export async function submitDepositDirect(args: {
     payer: ethers.Signer;
-    intent: DepositIntent;
-    aux: [AuxOutput, AuxOutput];
+    deposit: DepositRequest;
+    aux: AuxOutput;
     tokenAddr: string;
     maxTotal: bigint;
     deadline?: bigint;
-}): Promise<SubmitIntentResult> {
-    const { payer, intent, aux, tokenAddr, maxTotal } = args;
-    const piHash = computePiHash(intent, aux);
-    const nonce = BigInt(Date.now()) << 8n;
+}): Promise<SubmitDepositResult> {
+    const { payer, deposit, aux, tokenAddr, maxTotal } = args;
+    const piHash = computePiHash(deposit, aux);
+    const nonce = nextPermit2Nonce();
     const deadline = args.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 3600);
-    // SDK 0.5 `signPermit2Witness` takes a viem-shaped `EthSigner`. Use
-    // the shared PAYER signer (memoised); tx broadcast still goes through
-    // the ethers `payer` below.
+    // `signPermit2Witness` takes a viem-shaped `EthSigner`. Use the shared
+    // PAYER signer (memoised); tx broadcast still goes through the ethers
+    // `payer` below.
     const sig = await signPermit2Witness({
         signer: payerEthSigner(),
         chainId: env.chainId,
@@ -178,25 +195,24 @@ export async function submitIntentDirect(args: {
         piHash,
         permit2Address: env.permit2Address,
     });
-    const masp = new ethers.Contract(env.maspAddress, MASP_INTENT_ABI, payer);
-    const tx = await masp.submitIntent(
+    const masp = new ethers.Contract(env.maspAddress, MASP_DEPOSIT_ABI, payer);
+    const tx = await masp.deposit(
         [
-            intent.chainId,
-            intent.publicAssetId,
-            intent.publicIn,
-            intent.payer,
-            intent.recipient,
-            intent.outCm,
-            intent.cvDep0,
-            intent.cvDep1,
-            intent.rcvTotal,
+            deposit.chainId,
+            deposit.publicAssetId,
+            deposit.publicIn,
+            deposit.payer,
+            deposit.recipient,
+            deposit.outCm,
+            deposit.cvDep,
+            deposit.rcv,
         ],
         [sig.nonce, sig.deadline, sig.maxTotal, sig.signature],
-        aux.map((a) => [a.clueRx, a.clueRy, a.ephPubX, a.ephPubY, ethers.hexlify(a.ciphertext)]),
+        [aux.clueRx, aux.clueRy, aux.ephPubX, aux.ephPubY, ethers.hexlify(aux.ciphertext)],
     );
     const receipt = await tx.wait();
-    const intentId = extractIntentId(receipt, masp);
-    return { txHash: tx.hash, intentId };
+    const depositId = extractDepositId(receipt, masp);
+    return { txHash: tx.hash, depositId };
 }
 
 // Skips logs from foreign ABIs (ethers parseLog throws on those).
@@ -218,13 +234,13 @@ export function parseContractLogs(
     return out;
 }
 
-function extractIntentId(
+function extractDepositId(
     receipt: ethers.TransactionReceipt | ethers.ContractTransactionReceipt | null,
     masp: ethers.Contract,
 ): bigint {
-    const escrowed = parseContractLogs(receipt, masp, "IntentEscrowed");
+    const escrowed = parseContractLogs(receipt, masp, "DepositEscrowed");
     if (escrowed.length === 0) {
-        throw new Error("submitIntent: IntentEscrowed log not found");
+        throw new Error("deposit: DepositEscrowed log not found");
     }
     return escrowed[0].args[0] as bigint;
 }
@@ -238,7 +254,7 @@ export async function waitForBatchFlushTx(args: {
     timeoutMs?: number;
 }): Promise<string> {
     const { provider, masp, maspAddress, fromBlock, wantedIds } = args;
-    const flushTopic = masp.interface.getEvent("IntentFlushed")!.topicHash;
+    const flushTopic = masp.interface.getEvent("DepositFlushed")!.topicHash;
     const wanted = new Set(wantedIds.map((id) => id.toString()));
     return pollUntil(async () => {
         const logs = await provider.getLogs({
@@ -262,10 +278,13 @@ export async function waitForBatchFlushTx(args: {
 
 // SDK re-exports — kept here so tests import everything from `./harness`.
 export {
+    assetId,
     buildNoteCommitment,
+    circuitAmount,
     type Note,
-    type SpendableCachedNote,
+    TRANSACT_3X3,
 } from "@lelantos-org/sdk";
+export type { SpendableCachedNote } from "@lelantos-org/sdk/circuit";
 export {
     DepositAdapterError,
     InsufficientCoverError,
@@ -280,16 +299,21 @@ export {
     type WalletErrorCode,
 } from "@lelantos-org/sdk/errors";
 
-// Local re-exports.
+// Local re-exports. Tests should be able to get everything they need from
+// this module plus `./fixture.js`, so anything a test reaches for belongs here.
 export {
-    ASSET, ASSETS, baseAmt, DEAD_ADDRESS, FEE_BPS, feeFor, MASP_ABI, POLL,
-    type PollOpts, scaleFor, TIMEOUT, withFee,
+    amt, ASSET, ASSETS, baseAmt, circuitFee, DEAD_ADDRESS, FEE_BPS, feeFor, LIST_LIMIT,
+    MASP_ABI, MASP_DEPOSIT_ABI, MOCK_ERC20_ABI, N_IN, N_OUT, POLL, type PollOpts, REVERT,
+    scaleFor, SWAP_WRAPPER_ABI, SYNC_LIMIT, TEST_TIMEOUT, TIMEOUT, withFee,
 } from "./constants.js";
 export {
-    type Erc20Helpers, ExplorerClient, expectBalanceDeltas, inputSlotFor,
-    makeWallet, noteFor, recipientCommitments, rngForOutput, setupErc20, setupWeth,
-    snapshotBalances, type TestWallet, waitForAdvance, waitForCm,
+    accruedFee, type Erc20Helpers, ExplorerClient, expectBalanceDeltas,
+    makeWallet, noteFor, padOutputs, recipientCommitments, rngForOutput, setupErc20, setupWeth,
+    snapshotBalances, type CircuitWallet, trackedAddrs, waitForAdvance, waitForCm,
 } from "./scenario.js";
+// NB: `fixture.ts` is deliberately *not* re-exported here — it imports this
+// module, and routing it back through the barrel would make the cycle load-
+// order sensitive. Tests import it directly from `../src/fixture.js`.
 export { payerEthSigner } from "./signers.js";
 export { cmToHex, counter, expectRevert, nfToHex, pollUntil } from "./utils.js";
 export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";

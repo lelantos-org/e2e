@@ -1,48 +1,60 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { TransactionResult } from "@lelantos-org/sdk";
+
 import {
+    amt,
     ASSET,
-    createTestWallet,
-    type Harness,
     awaitOwn,
-    setupHarness,
+    awaitRecipient,
+    REVERT,
     TEST_NSK,
+    TEST_TIMEOUT,
     withFee,
 } from "../../src/harness.js";
+import { setupFile, type SdkWallet } from "../../src/fixture.js";
 
-const { alice: NSK } = TEST_NSK.edgeConcurrent;
-const DEPOSIT = 40n;
+const DEPOSIT = amt(40n);
 
 describe("edge: concurrent spends of one note", () => {
-    let h: Harness;
-    let alice: Awaited<ReturnType<typeof createTestWallet>>;
-    let bob: Awaited<ReturnType<typeof createTestWallet>>;
+    let alice: SdkWallet;
+    let bob: SdkWallet;
 
     beforeAll(async () => {
-        h = await setupHarness({
-            fund: [{ kind: "erc20", token: (await import("../../src/env.js")).env.token2, amount: withFee(DEPOSIT) }],
-        });
-        alice = await createTestWallet(h, NSK);
-        bob = await createTestWallet(h, NSK + 1n);
+        ({ w: { alice, bob } } = await setupFile({
+            nsks: TEST_NSK.edgeConcurrent,
+            fund: [{ asset: ASSET, amount: withFee(DEPOSIT) }],
+        }));
     });
 
     it("only one of two parallel spends of the same note succeeds", async () => {
         const r = await alice.deposit({ amount: DEPOSIT, asset: ASSET });
         await awaitOwn(alice, r);
 
-        // Coin selector picks the same input twice; second to hit `spent[nf]` reverts.
+        // Coin selector picks the same input twice; the loser hits the
+        // nullifier guard.
         const results = await Promise.allSettled([
             alice.transfer({ to: bob.address, amount: DEPOSIT, asset: ASSET }),
             alice.transfer({ to: bob.address, amount: DEPOSIT, asset: ASSET }),
         ]);
 
-        const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+        const fulfilled = results.filter((r) => r.status === "fulfilled");
         const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
-        expect(fulfilled).toBe(1);
+        expect(fulfilled.length, "exactly one spend lands").toBe(1);
         expect(rejected.length).toBe(1);
-        // Error layer shifts between SDK selector, relayer, and contract.
-        expect(rejected[0].reason?.message ?? String(rejected[0].reason)).toMatch(
-            /spent|nullifier|already|reverted|insufficient/i,
-        );
-    }, 360_000);
+
+        const reason = rejected[0].reason;
+        const message = `${reason?.message ?? ""} || ${String(reason)}`;
+        expect(message).toMatch(REVERT.NULLIFIER_CONTESTED);
+
+        // The decisive property, and the reason a rejection alone is not
+        // enough: one note in, one credit out. Sync bob against the winner
+        // rather than reading his (still empty) local store — an unsynced
+        // wallet reporting zero would "pass" even if the note had been spent
+        // twice.
+        const winner = (fulfilled[0] as PromiseFulfilledResult<TransactionResult>).value;
+        await awaitRecipient(bob, winner);
+        expect(bob.balance(ASSET), "credited exactly once").toBe(DEPOSIT);
+        expect(alice.balance(ASSET), "the note is spent, not double-spent").toBe(0n);
+    }, TEST_TIMEOUT.SWAP);
 });

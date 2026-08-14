@@ -1,3 +1,5 @@
+import { ethers } from "ethers";
+
 import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk";
 
 export function bytesToHex(b: Uint8Array): string {
@@ -43,8 +45,11 @@ export function waitForSignal(): Promise<void> {
     });
 }
 
-// Predicate exceptions are swallowed: warm-up reads (connection refused,
-// not-yet-indexed) are expected to fail until the service is ready.
+// Predicate exceptions are swallowed while polling: warm-up reads (connection
+// refused, not-yet-indexed) are expected to fail until the service is ready.
+// The *last* one is kept and reported on timeout — without it a 120s timeout
+// says only "timed out", which is indistinguishable between "the service never
+// came up", "the row never landed" and "the predicate itself has a bug".
 export async function pollUntil<T>(
     predicate: () => Promise<T | null | undefined>,
     opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
@@ -53,18 +58,36 @@ export async function pollUntil<T>(
     const intervalMs = opts.intervalMs ?? 500;
     const label = opts.label ?? "predicate";
     const start = Date.now();
+    let lastErr: unknown;
+    let attempts = 0;
     while (true) {
+        attempts++;
         try {
             const v = await predicate();
             if (v) return v;
-        } catch {
-            // keep polling
+            lastErr = undefined;
+        } catch (e) {
+            lastErr = e;
         }
         if (Date.now() - start > timeoutMs) {
-            throw new Error(`pollUntil(${label}) timed out after ${timeoutMs}ms`);
+            const elapsed = Date.now() - start;
+            const why = lastErr === undefined
+                ? "predicate never returned a value"
+                : `last error: ${summarize(lastErr)}`;
+            // Duplicated into the message because vitest's CI reporters do not
+            // reliably print `cause`.
+            throw new Error(
+                `pollUntil(${label}) timed out after ${elapsed}ms (${attempts} attempts) — ${why}`,
+                { cause: lastErr },
+            );
         }
         await new Promise((r) => setTimeout(r, intervalMs));
     }
+}
+
+function summarize(e: unknown): string {
+    const msg = e instanceof Error ? (e.message || e.constructor.name) : String(e);
+    return msg.length > 300 ? `${msg.slice(0, 300)}…` : msg;
 }
 
 type ErrorCtor = new (...args: never[]) => Error;
@@ -118,13 +141,34 @@ function failure(reason: string, err: Error): Error {
     return new Error(`expectRevert: ${reason}${err.message ? ` (${err.message})` : ""}`);
 }
 
-// Hand-mapped revert selectors → readable names. Used so expectRevert regexes
-// can match on the error name when ethers v6 surfaces the raw `data` from a
-// sub-call (e.g. Permit2's `SignatureExpired`) without decoding it.
-const KNOWN_SELECTORS: Record<string, string> = {
-    "0xcd21db4f": "SignatureExpired(deadline)",
-    "0xcc34802d": "MustHaveDeposit()",
-};
+// Revert selectors → readable names, so expectRevert regexes can match on the
+// error name when ethers v6 surfaces the raw `data` from a sub-call (e.g.
+// Permit2's `SignatureExpired`) without decoding it.
+//
+// Derived from the signatures rather than hand-written hex: a hand-typed
+// selector that is subtly wrong fails open — the regex simply never matches
+// and the test reports "did not match" instead of the real reason.
+const KNOWN_ERROR_SIGNATURES = [
+    // Permit2 (ISignatureTransfer / IAllowanceTransfer)
+    "SignatureExpired(uint256)",
+    "InvalidAmount(uint256)",
+    "InvalidNonce()",
+    // MASP
+    "MustHaveDeposit()",
+    "AmountOverflowsAllowance()",
+    "UnknownRoot()",
+    // NullifierSet
+    "DoubleSpend()",
+    "DuplicateNullifier()",
+    // SwapWrapper
+    "AdapterNotAllowed()",
+    "InsufficientOut(uint256,uint256)",
+    "MaspPullBelowMinOut(uint256,uint256)",
+] as const;
+
+const KNOWN_SELECTORS: Record<string, string> = Object.fromEntries(
+    KNOWN_ERROR_SIGNATURES.map((sig) => [ethers.id(sig).slice(0, 10).toLowerCase(), sig]),
+);
 
 function collectMessage(e: Error): string {
     const parts: string[] = [];

@@ -3,6 +3,7 @@ import {
     type Field,
     InMemoryNoteStore,
     nodeWallet,
+    TRANSACT_3X3,
     ViemChainAdapter,
     type Wallet,
 } from "@lelantos-org/sdk";
@@ -10,7 +11,6 @@ import {
 import { RELAYER } from "./accounts.js";
 import { TREE_DEPTH } from "./constants.js";
 import { env } from "./env.js";
-import type { Harness } from "./harness.js";
 import { PROVER_PATHS } from "./harness.js";
 import { payerEthSigner } from "./signers.js";
 
@@ -28,15 +28,15 @@ export const TEST_NSK = {
     twoInputMerge:  { alice: 0x22_a1ce_a11c0n, bob: 0x22_b0b_b0b00n },
     multiAsset:     { alice: 0xaa_a1ce_a11c0n },
     withdrawNative: { alice: 0xee_a1ce_a11c0n },
+    depositNative:  { alice: 0xde_a1ce_a11c0n },
     batchFlush:     { alice: 0xbf_a1ce_a11c0n },
     swap:           { alice: 0x55_a1ce_a11c0n },
     negExpired:     { alice: 0xe1_a1ce_a11c0n },
     negZeroValue:   { alice: 0xe2_a1ce_a11c0n },
-    edgeConcurrent: { alice: 0xed_a1ce_a11c0n },
+    edgeConcurrent: { alice: 0xed_a1ce_a11c0n, bob: 0xed_b0b_b0b00n },
 } as const;
 
 export async function createTestWallet(
-    _h: Harness,
     nsk: Field,
     opts: CreateWalletOpts = {},
 ): Promise<Wallet> {
@@ -46,6 +46,9 @@ export async function createTestWallet(
         signer,
         maspAddress: env.maspAddress,
         permit2Address: env.permit2Address,
+        // Enables `asEth` deposits and `withdrawEth`; both are bound to this
+        // address rather than the pool.
+        nativeAdapterAddress: env.nativeAdapterAddress,
         chainId: env.chainId,
     });
     return nodeWallet({
@@ -53,6 +56,7 @@ export async function createTestWallet(
         config: {
             chainId: env.chainId,
             treeDepth: TREE_DEPTH,
+            shape: TRANSACT_3X3,
             relayerAddress: RELAYER.address,
             chain,
             fmdUrl: env.fmdUrl,

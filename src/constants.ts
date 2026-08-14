@@ -1,5 +1,7 @@
 import { resolve } from "node:path";
 
+import { type AssetId, assetId, type CircuitAmount, circuitAmount } from "@lelantos-org/sdk";
+
 export const CHAIN_ID = "31337";
 
 export const E2E_DIR = resolve(__dirname, "..");
@@ -30,11 +32,37 @@ export const BASE_RUST_ENV = {
 
 export const DEFAULT_STARTUP_MS = 60_000;
 
+/// How long the suite's internal polls wait before giving up. Not per-test
+/// budgets — those are `TEST_TIMEOUT`.
 export const TIMEOUT = {
     POLL_DEFAULT_MS: 120_000,
     BATCH_FLUSH_MS: 150_000,
-    BATCH_FLUSH_TEST_MS: 240_000,
+    BALANCE_POLL_MS: 150_000,
 } as const;
+
+/// Per-`it` budgets, passed as vitest's timeout argument. Named by what the
+/// test actually waits on, so a slow CI run is retuned in one place.
+export const TEST_TIMEOUT = {
+    /// One spend: proof + chain inclusion + indexer pickup.
+    SPEND: 240_000,
+    /// A swap — as above plus the relayer-flushed second leg.
+    SWAP: 360_000,
+    /// A multi-transaction narrative inside a single `it`.
+    SEQUENCE: 600_000,
+    /// Reads settled state only; no chain round trip.
+    LOCAL: 60_000,
+    /// N parallel deposits plus a relayer flush tick.
+    BATCH_FLUSH: 240_000,
+} as const;
+
+// Page sizes for the shared indexes. Test files share one fmd index, so these
+// are a silent correctness cliff: once the index holds more rows than this, a
+// freshly written note can be buried behind older pages and a `sync()` that
+// "found nothing" is really "looked at the wrong page". Named so that a suite
+// growing past them is a visible edit rather than a mysterious flake.
+export const SYNC_LIMIT = 200;
+// fmd-webserver caps `listNotes` at 1000 rows; ask for the max.
+export const LIST_LIMIT = 1000;
 
 export interface PollOpts {
     maxAttempts: number;
@@ -49,21 +77,32 @@ export const POLL: Record<"COMMITMENT" | "SPEND", PollOpts> = {
     SPEND:      { maxAttempts: 60, pollMs: 1500 },
 } as const;
 
-// Must match `circuits/2x2.circom` `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
+// Must match `circuits/3x3.circom` `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
 export const TREE_DEPTH = 10;
+
+// Circuit arity. `PubInputs.TRANSACT_IN` / `TRANSACT_OUT` in the contracts and
+// `TRANSACT_3X3` in the SDK; all three must agree or the verifier rejects.
+export const N_IN = 3;
+export const N_OUT = 3;
 
 // FMD γ. False-positive rate = 2^-γ. Must match asset registry + circuit.
 export const FMD_GAMMA = 5;
 
-// Mirrors `contracts/test/fixtures/asset_registry.json`.
+// Mirrors `contracts/test/fixtures/asset_registry.json`. Branded at the source:
+// the SDK wallet surface takes `AssetId`, and the brand widens back to `bigint`
+// for the local scale/fee helpers and for `bundleCommon`.
 export const ASSETS = {
-    WETH: 1n,  // WETH9 mock — no public `mint(address,uint256)`; use `setupWeth`.
-    MDAI: 2n,  // MockERC20 with public mint; default for fee/scale helpers.
-    MWBTC: 3n, // MockERC20, scale = 1 (8-decimal).
+    WETH: assetId(1n),  // WETH9 mock — no public `mint(address,uint256)`; use `setupWeth`.
+    MDAI: assetId(2n),  // MockERC20 with public mint; default for fee/scale helpers.
+    MWBTC: assetId(3n), // MockERC20, scale = 1 (8-decimal).
 } as const;
 
 // Default asset for feeFor/baseAmt/withFee.
-export const ASSET = ASSETS.MDAI;
+export const ASSET: AssetId = ASSETS.MDAI;
+
+/// Circuit-unit amount literal. The SDK wallet takes `CircuitAmount`; tests
+/// deal in whole units, so this is the shorthand at every call site.
+export const amt = (v: bigint): CircuitAmount => circuitAmount(v);
 
 // Burn / non-allowlisted adapter sentinel for negative tests.
 export const DEAD_ADDRESS = "0x000000000000000000000000000000000000dEaD" as const;
@@ -98,6 +137,14 @@ export function withFee(amount: bigint, asset: bigint = ASSET): bigint {
     return amount * scaleFor(asset) + feeFor(amount, asset);
 }
 
+/// Fee in *circuit* units, for amounts that never get scaled to base units —
+/// the debit a withdraw takes off a shielded balance, say. Mirrors the SDK's
+/// `applyFee`; `feeFor` is the base-unit equivalent and scales first, so the
+/// two are not interchangeable (they floor at different magnitudes).
+export function circuitFee(amount: bigint): bigint {
+    return (amount * FEE_BPS) / 10_000n;
+}
+
 export const MASP_ABI = [
     "function isKnownRoot(bytes32) view returns (bool)",
     "function currentRoot() view returns (bytes32)",
@@ -106,9 +153,10 @@ export const MASP_ABI = [
     "function feeBps() view returns (uint16)",
     "function treasury() view returns (address)",
     "function accruedFee(address) view returns (uint256)",
-    "function verifyProof(tuple(uint256[2] a, uint256[2][2] b, uint256[2] c) p, tuple(bytes32 merkleRoot, bytes32[2] nullifier, bytes32[2] outCm, uint64 publicAssetId, uint64 publicIn, uint64 publicOut, uint256[2][2] inCv, uint256[2][2] outCv, address recipient, uint256 chainId, address payer, address relayer, uint256[2][2] outCvDep) pi, tuple(uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[2] aux) view returns (bool)",
+    "function verifyProof(tuple(uint256[2] a, uint256[2][2] b, uint256[2] c) p, tuple(bytes32 merkleRoot, bytes32[3] nullifier, bytes32[3] outCm, uint64 publicAssetId, uint64 publicIn, uint64 publicOut, uint256[2][3] inCv, uint256[2][3] outCv, address recipient, uint256 chainId, address payer, address relayer, uint256[2][3] outCvDep) pi, tuple(uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[3] aux) view returns (bool)",
     "function VERIFIER() view returns (address)",
-    "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
+    "event DepositFlushed(uint256 indexed id, bytes32 cm)",
+    "event NotePayload(bytes32 indexed cm, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint256 cvDepX, uint256 cvDepY)",
     "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",
 ] as const;
 
@@ -124,16 +172,21 @@ export const MOCK_WETH9_ABI = [
     "function balanceOf(address) view returns (uint256)",
 ] as const;
 
-// submitIntent + cancelIntent + IntentEscrowed event; separated from MASP_ABI
-// because submitIntentDirect bypasses the SDK Wallet path.
-export const MASP_INTENT_ABI = [
-    "function submitIntent((uint64 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32[2] outCm,uint256[2] cvDep0,uint256[2] cvDep1,uint256 rcvTotal) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext)[2] aux) returns (uint256)",
-    "function cancelIntent(uint256 id)",
+// deposit + cancelDeposit + DepositEscrowed event; separated from MASP_ABI
+// because submitDepositDirect bypasses the SDK Wallet path.
+//
+// A deposit occupies exactly one leaf: `outCm` is a single `bytes32` and the
+// leaf's Pedersen anchor is `(cvDep, rcv)` — the old `cvDep0/cvDep1/rcvTotal`
+// triple existed only to pin a zero-value pad leaf the contract now collapses.
+export const MASP_DEPOSIT_ABI = [
+    "function deposit((uint256 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32 outCm,uint256[2] cvDep,uint256 rcv) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) aux) returns (uint256)",
+    "function depositAuthorized((uint256 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32 outCm,uint256[2] cvDep,uint256 rcv) d, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) aux) returns (uint256)",
+    "function cancelDeposit(uint256 id, uint48 publicIn, bytes32 cm, uint256[2] cvDep, uint64 publicAssetId, uint16 fbps, address payer, uint32 submittedAt)",
     "function cancelDelay() view returns (uint32)",
     "error SignatureExpired(uint256 signatureDeadline)",
     "error MustHaveDeposit()",
-    "event IntentEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm0, bytes32 cm1, uint256 cvDep0X, uint256 cvDep0Y, uint256 cvDep1X, uint256 cvDep1Y, uint256 rcvTotal, uint256 clueRx0, uint256 clueRy0, uint256 ephPubX0, uint256 ephPubY0, bytes ciphertext0, uint256 clueRx1, uint256 clueRy1, uint256 ephPubX1, uint256 ephPubY1, bytes ciphertext1)",
-    "event IntentFlushed(uint256 indexed id, bytes32 cm0, bytes32 cm1)",
+    "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm, uint256 cvDepX, uint256 cvDepY, uint256 rcv, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)",
+    "event DepositFlushed(uint256 indexed id, bytes32 cm)",
 ] as const;
 
 export const MOCK_QUOTER_V2_ABI = [
@@ -145,8 +198,55 @@ export const MOCK_SWAP_ROUTER_ABI = [
     "function nextOut() view returns (uint256)",
 ] as const;
 
+/// Rejection reasons, matched by `expectRevert`.
+///
+/// Each entry names the specific guard its test is about. Where more than one
+/// alternative is listed they are all *named states of that same guard* (the
+/// relayer's pre-check versus the pool's on-chain check, say) — never a
+/// catch-all like `/reverted/i`, which would let a misconfigured harness pass
+/// a negative test without exercising anything.
+///
+/// Contract error names come from `vendor/contracts`; relayer messages from
+/// `AppError` in `vendor/backend/crates/relayer/src/domain/error.rs`. Selectors
+/// are decoded by `KNOWN_SELECTORS` in `utils.ts` for the cases where ethers
+/// surfaces raw `data` from a sub-call.
+///
+/// Note there is no entry for the swap wrapper's guards: the relayer collapses
+/// every submit-time swap revert to an opaque `HTTP 500: internal error`, so
+/// `AdapterNotAllowed` and the router's under-delivery revert never reach a
+/// client. `tests/swap.test.ts` asserts on effects instead, and says so.
+export const REVERT = {
+    /// A spend of an already-published nullifier. Two layers can catch it and
+    /// which one does is a timing detail, so both named states are accepted:
+    /// the relayer rejects with `AppError::NullifierAlreadySpent` (HTTP 409,
+    /// `crates/relayer/src/domain/error.rs`) as soon as it has seen the first
+    /// spend, and only a request that gets past it reaches the pool's
+    /// `NullifierSet.DoubleSpend()`. In practice the relayer wins.
+    NULLIFIER_SPENT: /nullifier already spent|DoubleSpend/,
+    /// The loser of a race between two spends of one note. Same guard as
+    /// above, but the winner has not been indexed yet, so the relayer reports
+    /// the nullifier as in flight rather than spent. Both outcomes are correct
+    /// and which one appears depends on how far the loser got.
+    NULLIFIER_CONTESTED: /nullifier in flight|nullifier already spent|DoubleSpend/,
+    /// Permit2 `InvalidAmount(uint256)` — requestedAmount exceeds the signed
+    /// `permitted.amount` (our `sig.maxTotal`).
+    PERMIT2_INVALID_AMOUNT: /InvalidAmount/,
+    /// Permit2 `SignatureExpired(uint256)`.
+    PERMIT2_EXPIRED: /SignatureExpired/,
+    /// `SwapWrapper.AdapterNotAllowed()` — adapter is not on the allowlist.
+    /// Reaches the client as the relayer's `ContractRejected` (HTTP 400),
+    /// which echoes the contract's revert data; the selector is decoded by
+    /// `KNOWN_SELECTORS` in `utils.ts`.
+    ADAPTER_NOT_ALLOWED: /AdapterNotAllowed/,
+    /// The *router* rejects first: `UniV3Adapter` forwards `minOut` as
+    /// `amountOutMinimum`, so `MockSwapRouter02`'s require trips before
+    /// `SwapWrapper.InsufficientOut` is ever reached. Matching the wrapper's
+    /// error here would silently never fire.
+    SWAP_UNDER_MIN_OUT: /too little received/,
+} as const;
+
 // Full SwapArgs calldata layout lives in `swap-harness.ts`.
 export const SWAP_WRAPPER_ABI = [
     "function adapterAllowed(address) view returns (bool)",
-    "event SwapExecuted(address indexed adapter, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 actualOut, uint256 dust, uint256 intentId)",
+    "event SwapExecuted(address indexed adapter, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 actualOut, uint256 dust, uint256 depositId)",
 ] as const;

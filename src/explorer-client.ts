@@ -4,13 +4,6 @@ export interface TreeAdvance {
     newRootHex: string;
 }
 
-export interface IntentRecord {
-    id: string;
-    cm0: string;
-    cm1: string;
-    txHash: string;
-}
-
 export class ExplorerClient {
     constructor(private readonly baseUrl: string, private readonly chainId: bigint) {}
 
@@ -25,13 +18,6 @@ export class ExplorerClient {
         const r = await fetch(this.url("/v1/tree-advances", { limit: opts.limit ?? 20 }));
         if (!r.ok) throw new Error(`explorer.treeAdvances: ${r.status}`);
         return (await r.json()) as TreeAdvance[];
-    }
-
-    async intentById(id: string): Promise<IntentRecord | null> {
-        const r = await fetch(this.url(`/v1/intents/${id}`));
-        if (r.status === 404) return null;
-        if (!r.ok) throw new Error(`explorer.intentById: ${r.status}`);
-        return (await r.json()) as IntentRecord;
     }
 
     async healthz(): Promise<boolean> {

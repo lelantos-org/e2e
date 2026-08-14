@@ -20,7 +20,8 @@ export interface Addresses {
     treeUpdateVerifier: string;
     masp: string;
     tokens: Record<number, string>;
-    weth?: string;
+    wrappedNative?: string;
+    nativeAdapter?: string;
     permit2: string;
     swap?: SwapAddresses;
 }
@@ -48,6 +49,7 @@ export interface StackEnv extends Urls {
     payerKey: string;
     recipientAddress: string;
     permit2: string;
+    nativeAdapter?: string;
     swap?: SwapAddresses;
 }
 
@@ -134,7 +136,7 @@ export class Stack {
     // Ingester runs alone first (owns schema migrations); the rest start in parallel.
     async upBackend(addrs: Addresses): Promise<Urls> {
         if (!this.network) throw new Error("upBackend: call up() first");
-        const specs = backendSpecs(addrs.masp, addrs.swap);
+        const specs = backendSpecs(addrs.masp, addrs.swap, addrs.nativeAdapter);
 
         const ingester = await runService(specs.ingester, this.network);
         this.backends.push(ingester);
@@ -172,6 +174,7 @@ export class Stack {
             payerKey: PAYER.privateKey,
             recipientAddress: RECIPIENT.address,
             permit2: this.addresses.permit2,
+            nativeAdapter: this.addresses.nativeAdapter,
             swap: this.addresses.swap,
         };
     }
@@ -179,13 +182,19 @@ export class Stack {
     async down(): Promise<void> {
         const fs = await import("node:fs");
         const { execSync } = await import("node:child_process");
+        // Final `docker logs` dump, written next to the streamed per-service
+        // logs from `runService`. Both sinks used to be needed but landed in
+        // different directories, so CI (which uploads only `E2E_LOG_DIR`) was
+        // collecting half of them; keep them together.
+        const logDir = process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
+        fs.mkdirSync(logDir, { recursive: true });
         for (const c of this.backends) {
             try {
                 const id = (c as any).getId?.() ?? "";
                 const name = ((c as any).getName?.() ?? "unknown").replace(/^\//, "");
                 if (!id) continue;
                 const out = execSync(`docker logs ${id} 2>&1 || true`, { maxBuffer: 64 * 1024 * 1024 });
-                fs.writeFileSync(`/tmp/e2e-${name}.log`, out);
+                fs.writeFileSync(`${logDir}/${name}.docker.log`, out);
             } catch {}
         }
         const stops: Promise<unknown>[] = [];
@@ -238,7 +247,7 @@ function parseSwapOutput(stdout: string): SwapAddresses {
 function parseDeployOutput(stdout: string): Addresses {
     const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
     const re =
-        /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WETH|PERMIT2|UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
+        /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WRAPPED_NATIVE|NATIVE_ADAPTER|PERMIT2|UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
     const found = new Map<string, string>();
     for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
 
@@ -272,7 +281,8 @@ function parseDeployOutput(stdout: string): Addresses {
         treeUpdateVerifier: found.get("TREE_UPDATE_BATCH_VERIFIER")!,
         masp: found.get("MASP")!,
         tokens,
-        weth: found.get("WETH"),
+        wrappedNative: found.get("WRAPPED_NATIVE"),
+        nativeAdapter: found.get("NATIVE_ADAPTER"),
         permit2: found.get("PERMIT2")!,
         swap,
     };

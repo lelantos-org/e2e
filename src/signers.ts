@@ -1,9 +1,9 @@
-// SDK 0.5 swapped its signer abstraction from `ethers.Signer` to the
-// viem-shaped `EthSigner`. e2e still drives Foundry/ABI work through
-// ethers, so tests carry two views of the PAYER:
+// The SDK's signer abstraction is the viem-shaped `EthSigner`. e2e still
+// drives Foundry/ABI work through ethers, so tests carry two views of the
+// PAYER:
 //   * `h.payer`   — `ethers.Wallet` for direct contract calls
 //   * `payerEthSigner()` — viem `EthSigner` for SDK paths (permit2 sign,
-//     submitIntent, transact, swap)
+//     deposit, transact, swap)
 // Both must NOT cache nonces locally, otherwise they diverge from chain
 // state (see harness.ts comment on dropping `NonceManager`).
 

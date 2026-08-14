@@ -1,55 +1,75 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { env } from "../src/env.js";
 import {
+    amt,
     ASSET,
-    createTestWallet,
-    type Harness,
     awaitOwn,
-    setupHarness,
+    createTestWallet,
+    expectRevert,
+    REVERT,
+    SYNC_LIMIT,
     TEST_NSK,
+    TEST_TIMEOUT,
     withFee,
 } from "../src/harness.js";
+import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
-const { alice: ALICE_NSK, bob: BOB_NSK } = TEST_NSK.doubleSpend;
-const DEPOSIT_AMT = 50n;
+const { alice: ALICE_NSK } = TEST_NSK.doubleSpend;
+const DEPOSIT_AMT = amt(50n);
 
 describe("double-spend rejection", () => {
-    let h: Harness;
-    let alice: Awaited<ReturnType<typeof createTestWallet>>;
-    let stale: Awaited<ReturnType<typeof createTestWallet>>;
-    let bob: Awaited<ReturnType<typeof createTestWallet>>;
+    let alice: SdkWallet;
+    let bob: SdkWallet;
 
     beforeAll(async () => {
-        h = await setupHarness({
-            fund: [{ kind: "erc20", token: env.token2, amount: withFee(DEPOSIT_AMT) }],
-        });
-        alice = await createTestWallet(h, ALICE_NSK);
-        bob = await createTestWallet(h, BOB_NSK);
+        ({ w: { alice, bob } } = await setupFile({
+            nsks: TEST_NSK.doubleSpend,
+            fund: [{ asset: ASSET, amount: withFee(DEPOSIT_AMT) }],
+        }));
+    });
+
+    /// Alice's spendable note, plus a clone of her wallet synced *before* the
+    /// note is spent. The clone is the attacker: same nsk, same note, no
+    /// knowledge that the nullifier has since been published.
+    const funded = once(async () => {
+        const r = await alice.deposit({ amount: DEPOSIT_AMT, asset: ASSET });
+        await awaitOwn(alice, r);
+        const stale = await createTestWallet(ALICE_NSK);
+        await stale.sync({ limit: SYNC_LIMIT });
+        return { stale };
+    });
+
+    const spent = once(async () => {
+        await funded();
+        const r = await alice.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET });
+        await awaitOwn(alice, r);
     });
 
     it("deposit funds alice's spendable note", async () => {
-        const r = await alice.deposit({ amount: DEPOSIT_AMT, asset: ASSET });
-        await awaitOwn(alice, r);
+        const { stale } = await funded();
         expect(alice.balance(ASSET)).toBe(DEPOSIT_AMT);
-
-        // Stale clone: same nsk, synced before the first transfer lands.
-        stale = await createTestWallet(h, ALICE_NSK);
-        await stale.sync({ limit: 200 });
-        expect(stale.balance(ASSET)).toBe(DEPOSIT_AMT);
-    }, 240_000);
+        expect(stale.balance(ASSET), "clone sees the same note").toBe(DEPOSIT_AMT);
+    }, TEST_TIMEOUT.SPEND);
 
     it("first transfer spends alice's note (succeeds)", async () => {
-        const r = await alice.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET });
-        await awaitOwn(alice, r);
+        await spent();
         expect(alice.balance(ASSET)).toBe(0n);
         // bob's local store is empty until awaitCommitments fires.
         expect(bob.balance(ASSET)).toBe(0n);
-    }, 240_000);
+    }, TEST_TIMEOUT.SPEND);
 
-    it("replay from a stale wallet reverts", async () => {
-        await expect(
+    it("replay from a stale wallet is rejected", async () => {
+        const { stale } = await funded();
+        await spent();
+        // The clone still believes the note is unspent, so it builds a
+        // structurally valid spend over an already-published nullifier. In
+        // practice the relayer catches it before the pool does — see
+        // `REVERT.NULLIFIER_SPENT` for why both layers are accepted.
+        await expectRevert(
             stale.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET }),
-        ).rejects.toThrow();
-    }, 240_000);
+            REVERT.NULLIFIER_SPENT,
+        );
+        // The note is still Alice's, unspent value never moved to bob twice.
+        expect(bob.balance(ASSET), "no second credit to bob").toBe(0n);
+    }, TEST_TIMEOUT.SPEND);
 });

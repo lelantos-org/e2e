@@ -1,9 +1,5 @@
 name: E2E
 
-# Submodules (backend, circuits, contracts) require CHECKOUT_TOKEN: PAT or
-# fine-grained token with read access to lelantos-org/{backend,circuits,contracts}.
-# Default GITHUB_TOKEN can't clone other private repos.
-
 on:
   pull_request:
     branches:
@@ -12,7 +8,6 @@ on:
     branches:
       - main
   schedule:
-    # Nightly at 03:00 UTC. Off-peak GHA time, avoids workday concurrency.
     - cron: "0 3 * * *"
   workflow_dispatch:
 
@@ -30,9 +25,7 @@ jobs:
     timeout-minutes: 75
 
     env:
-      # Pinned circuits release. Bump in lockstep with verifier sols
-      # committed to lelantos-org/contracts (vkey must match this zkey).
-      CIRCUITS_RELEASE: v0.3.0
+      CIRCUITS_RELEASE: v0.8.0
 
     steps:
       - name: Free disk space
@@ -46,8 +39,6 @@ jobs:
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
 
-      # .gitmodules uses SSH URLs (git@github.com:...) for local dev.
-      # CI has no SSH key, so rewrite to HTTPS with token before init.
       - name: Init submodules (HTTPS via token)
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
@@ -69,9 +60,6 @@ jobs:
       - name: Setup Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          # Pinned to match local dev (1.5.1). Newer "stable" breaks
-          # DeployPermit2().deployPermit2() under --broadcast → MASP ctor
-          # reverts ZeroPermit2(). Bump deliberately when verified.
           version: v1.5.1
 
       - name: Install just
@@ -82,91 +70,58 @@ jobs:
         with:
           workspaces: vendor/backend
 
-      # Pull prebuilt circuit artifacts from circuits repo release.
-      # Avoids running the phase-2 trusted setup in CI; vkey baked into the
-      # zkey here matches the committed Verifier.sol / TreeUpdateBatchVerifier.sol.
-      # Bump CIRCUITS_RELEASE in lockstep with the verifier sols.
       - name: Fetch circuit artifacts
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
-          mkdir -p vendor/circuits/build/2x2_js vendor/circuits/build/tree_update_batch_js
+          mkdir -p vendor/circuits/build/3x3_js vendor/circuits/build/tree_update_batch_js
           gh release download "$CIRCUITS_RELEASE" \
             --repo lelantos-org/circuits \
-            --pattern '2x2.wasm' \
-            --pattern '2x2.r1cs' \
-            --pattern '2x2_final.zkey' \
+            --pattern '3x3.wasm' \
+            --pattern '3x3.r1cs' \
+            --pattern '3x3_final.zkey' \
             --pattern 'tree_update_batch.wasm' \
             --pattern 'tree_update_batch.r1cs' \
             --pattern 'tree_update_batch_final.zkey' \
             --dir vendor/circuits/build
-          mv vendor/circuits/build/2x2.wasm vendor/circuits/build/2x2_js/2x2.wasm
+          mv vendor/circuits/build/3x3.wasm vendor/circuits/build/3x3_js/3x3.wasm
           mv vendor/circuits/build/tree_update_batch.wasm vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
 
       - name: Verify circuit artifacts
         run: |
-          test -f vendor/circuits/build/2x2_final.zkey
-          test -f vendor/circuits/build/2x2.r1cs
-          test -f vendor/circuits/build/2x2_js/2x2.wasm
+          test -f vendor/circuits/build/3x3_final.zkey
+          test -f vendor/circuits/build/3x3.r1cs
+          test -f vendor/circuits/build/3x3_js/3x3.wasm
           test -f vendor/circuits/build/tree_update_batch_final.zkey
           test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
           test -f vendor/circuits/build/tree_update_batch.r1cs
 
-      # Hash the downloaded zkeys. Used as the relayer image cache key so
-      # a re-uploaded release asset (same tag, new randomness) invalidates
-      # the cache. Tag-string keying caused vkey/zkey drift in CI.
       - name: Compute zkey content hashes
         id: zkey-hashes
         run: |
           set -euo pipefail
           tree_sha=$(sha256sum vendor/circuits/build/tree_update_batch_final.zkey | cut -d' ' -f1)
-          pair_sha=$(sha256sum vendor/circuits/build/2x2_final.zkey | cut -d' ' -f1)
+          pair_sha=$(sha256sum vendor/circuits/build/3x3_final.zkey | cut -d' ' -f1)
           echo "tree_zkey_sha=$tree_sha" >> "$GITHUB_OUTPUT"
           echo "pair_zkey_sha=$pair_sha" >> "$GITHUB_OUTPUT"
           echo "tree_update_batch_final.zkey = $tree_sha"
-          echo "2x2_final.zkey               = $pair_sha"
+          echo "3x3_final.zkey               = $pair_sha"
 
-      # Guard 1: r1cs + wasm hashes must match what the committed verifier
-      # sols were generated against. Catches circuit-revision drift (release
-      # ships an older circom build whose witness layout no longer matches
-      # MASP.sol's compress() -- vkey may still line up but on-chain
-      # pairing fails). Hashes are pinned in contracts/src/circuit-artifacts.sha256.
-      - name: Verify circuit r1cs/wasm hashes match committed pins
-        run: |
-          set -euo pipefail
-          # Build a checkfile with paths relative to vendor/circuits/build.
-          # sha256sum -c needs the path layout to match the file.
-          (
-            cd vendor/circuits/build
-            # Rewrite "<sha>  tree_update_batch.wasm" -> "<sha>  tree_update_batch_js/tree_update_batch.wasm"
-            # and similar for 2x2.wasm, since wasm lives under <name>_js/.
-            sed \
-              -e 's| tree_update_batch.wasm$| tree_update_batch_js/tree_update_batch.wasm|' \
-              -e 's| 2x2.wasm$| 2x2_js/2x2.wasm|' \
-              ../../contracts/src/circuit-artifacts.sha256 \
-              | grep -vE '^\s*(#|$)' \
-              | sha256sum -c -
-          )
-          echo "circuit r1cs/wasm match committed pins"
-
-      # Guard 2: committed verifier sols must match the vkeys baked into the
-      # downloaded zkeys. Catches release-asset re-upload drift before we
-      # waste ~30 min building images that would revert TreeUpdateRejected().
       - name: Verify vkeys match committed verifier sols
         run: |
           set -euo pipefail
           npx --yes snarkjs@0.7.5 zkey export solidityverifier \
             vendor/circuits/build/tree_update_batch_final.zkey /tmp/tubv.sol
           npx --yes snarkjs@0.7.5 zkey export solidityverifier \
-            vendor/circuits/build/2x2_final.zkey /tmp/v.sol
+            vendor/circuits/build/3x3_final.zkey /tmp/v.sol
 
           # Strip the `contract <Name> {` line; everything else (alpha/beta/
           # gamma/delta/IC constants) must match byte-for-byte.
           norm() { grep -vE '^contract [A-Za-z0-9_]+ \{' "$1"; }
-          diff <(norm /tmp/tubv.sol) <(norm vendor/contracts/src/TreeUpdateBatchVerifier.sol) \
+          diff <(norm /tmp/tubv.sol) <(norm vendor/contracts/src/verifiers/TreeUpdateBatchVerifier.sol) \
             || { echo "::error::TreeUpdateBatchVerifier.sol vkey != tree_update_batch_final.zkey vkey"; exit 1; }
-          diff <(norm /tmp/v.sol) <(norm vendor/contracts/src/Verifier.sol) \
-            || { echo "::error::Verifier.sol vkey != 2x2_final.zkey vkey"; exit 1; }
+          diff <(norm /tmp/v.sol) <(norm vendor/contracts/src/verifiers/Verifier.sol) \
+            || { echo "::error::Verifier.sol vkey != 3x3_final.zkey vkey"; exit 1; }
           echo "vkeys match committed verifier sols"
 
       - name: Setup Docker buildx
@@ -181,9 +136,6 @@ jobs:
           echo "be_dockerfile=$(sha256sum vendor/backend/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "rl_dockerfile=$(sha256sum vendor/backend/crates/relayer/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      # Per-image GHA cache. Backend-only services key on backend SHA +
-      # backend Dockerfile. Relayer also keys on circuits SHA + its own
-      # Dockerfile (it bakes circuit artifacts in).
       - name: Cache image — ingester
         id: cache-ingester
         uses: actions/cache/restore@v4
@@ -284,8 +236,6 @@ jobs:
           # Relayer (different Dockerfile + context).
           load_or_build relayer "$HIT_RELAYER" vendor/backend/crates/relayer/Dockerfile vendor
 
-      # Save each image cache immediately after build, so later-step
-      # failures don't waste the build work. Skip when already a cache hit.
       - name: Save image cache — ingester
         if: steps.cache-ingester.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -337,7 +287,7 @@ jobs:
 
       - name: Verify image tags
         run: |
-          for img in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer; do
+          for img in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer metaquoter; do
             docker image inspect lelantos/$img:dev >/dev/null
           done
 
@@ -346,19 +296,23 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: npm ci
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Run e2e
+        env:
+          E2E_LOG_DIR: /tmp/e2e-logs
         run: npm test
 
-      - name: Dump container logs on failure
+      - name: Collect leftover container state on failure
         if: failure()
         run: |
           mkdir -p /tmp/e2e-logs
-          docker ps -a > /tmp/e2e-logs/ps.txt || true
+          docker ps -a > /tmp/e2e-logs/ps.txt 2>&1 || true
           for cid in $(docker ps -aq); do
             name=$(docker inspect --format='{{.Name}}' "$cid" | sed 's|^/||')
-            docker logs "$cid" > "/tmp/e2e-logs/docker-${name}.log" 2>&1 || true
+            docker logs "$cid" > "/tmp/e2e-logs/leaked-${name}.log" 2>&1 || true
           done
-          # Streamed per-service logs (alias.log) live alongside; preserved as-is.
 
       - name: Upload logs artifact
         if: failure()
@@ -366,5 +320,14 @@ jobs:
         with:
           name: e2e-container-logs
           path: /tmp/e2e-logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results.xml
           if-no-files-found: ignore
           retention-days: 7

@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 
 resolveDockerHost();
-disableRyuk();
+enableRyuk();
 
 import type { StackEnv } from "./stack.js";
 import { log } from "./utils.js";
@@ -32,8 +32,8 @@ export default async function setup() {
     publishEnv(stack.env(urls));
 
     return async () => {
-        if (process.env.E2E_KEEP_ALIVE === "1") {
-            log("E2E_KEEP_ALIVE=1 → leaving stack running");
+        if (keepAlive()) {
+            log("E2E_KEEP_ALIVE=1 → leaving stack running (reaper off; `just down` to clean up)");
             return;
         }
         log("tearing down stack…");
@@ -55,9 +55,40 @@ function resolveDockerHost(): void {
     }
 }
 
-// Ryuk fails the "Started" log wait on colima; teardown is handled by globalTeardown.
-function disableRyuk(): void {
-    process.env.TESTCONTAINERS_RYUK_DISABLED ??= "true";
+/// Let Ryuk reap the stack when this process dies before its teardown runs.
+///
+/// Ryuk is itself a container: it watches the docker socket and removes
+/// everything carrying our session id once the client disconnects. So it needs
+/// that socket bind-mounted, and testcontainers mounts whatever path
+/// `DOCKER_HOST` names. On colima that is a *host* path
+/// (`~/.colima/default/docker.sock`) which does not exist inside the VM where
+/// Ryuk runs — the mount resolves to nothing, Ryuk never logs "Started", and
+/// its startup wait times out. That failure is why Ryuk used to be switched
+/// off here altogether, leaving a hard kill to strand the whole stack.
+///
+/// Naming the in-VM path fixes it. Only a unix socket needs the override; a
+/// TCP `DOCKER_HOST` (remote docker, some CI setups) has no socket to mount
+/// and Ryuk reaches the daemon over the network instead.
+///
+/// `E2E_KEEP_ALIVE=1` turns it off, because that flag means "leave the stack up
+/// so I can read its logs" and Ryuk would take it down the moment the run ends
+/// — the two cannot both be honoured. `TESTCONTAINERS_RYUK_DISABLED=true` also
+/// works if you want the reaper off without keeping the stack. Either way
+/// `just down` is the manual cleanup.
+function enableRyuk(): void {
+    if (keepAlive()) {
+        process.env.TESTCONTAINERS_RYUK_DISABLED ??= "true";
+        return;
+    }
+    if (process.env.DOCKER_HOST?.startsWith("unix://")) {
+        process.env.TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE ??= "/var/run/docker.sock";
+    }
+}
+
+/// Leave the stack running after the suite finishes, for `docker logs` and
+/// `curl` against the mapped ports. Skips teardown *and* the reaper.
+function keepAlive(): boolean {
+    return process.env.E2E_KEEP_ALIVE === "1";
 }
 
 function publishEnv(e: StackEnv): void {
@@ -74,6 +105,7 @@ function publishEnv(e: StackEnv): void {
     process.env.PAYER_KEY = e.payerKey;
     process.env.RECIPIENT_ADDRESS = e.recipientAddress;
     process.env.PERMIT2_ADDRESS = e.permit2;
+    if (e.nativeAdapter) process.env.NATIVE_ADAPTER_ADDRESS = e.nativeAdapter;
     if (e.metaquoter) process.env.METAQUOTER_URL = e.metaquoter;
     if (e.swap) {
         process.env.UNIV3_QUOTER_ADDRESS = e.swap.univ3Quoter;

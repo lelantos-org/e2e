@@ -4,15 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run --reporter=verbose",
+    "test": "vitest run",
+    "test:file": "vitest run",
+    "typecheck": "tsc --noEmit",
     "up": "tsx src/orchestrate.ts up",
     "down": "tsx src/orchestrate.ts down",
     "deploy": "tsx src/orchestrate.ts deploy",
     "urls": "tsx src/orchestrate.ts urls"
   },
   "dependencies": {
-    "@lelantos-org/circuits": "^0.6.4",
-    "@lelantos-org/sdk": "^0.5.4",
+    "@lelantos-org/circuits": "^0.8.0",
+    "@lelantos-org/sdk": "^0.10.3",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",

@@ -2,11 +2,14 @@
 // shape from the tx kind and route the right commitments to the right
 // wallet so each call site stays one line.
 
-import { FmdClient, type TransactionResult, type Wallet } from "@lelantos-org/sdk";
+import { ethers } from "ethers";
 
-import { POLL, type PollOpts } from "./constants.js";
+import { assetId, type TransactionResult, type Wallet } from "@lelantos-org/sdk";
+
+import { MASP_ABI, POLL, type PollOpts, SYNC_LIMIT, TIMEOUT } from "./constants.js";
+import { env } from "./env.js";
 import { recipientCommitments } from "./scenario.js";
-import { pollUntil } from "./utils.js";
+import { cmToHex, pollUntil } from "./utils.js";
 
 /// `deposit` waits on the shielding flush window (slowest); spends are
 /// faster because the relayer's spend pipeline is event-driven.
@@ -38,29 +41,52 @@ export async function awaitRecipient(
     await assertMerkleConsistency(w, recipientCommitments(r));
 }
 
-export async function assertMerkleConsistency(
-    w: Wallet,
-    cms: string[],
-): Promise<void> {
-    if (!w.cfg.fmdUrl) return;
-    const fmd = new FmdClient(w.cfg.fmdUrl, w.cfg.chainId);
+let _masp: ethers.Contract | undefined;
+
+function maspReader(): ethers.Contract {
+    _masp ??= new ethers.Contract(
+        env.maspAddress,
+        MASP_ABI,
+        new ethers.JsonRpcProvider(env.rpcUrl),
+    );
+    return _masp;
+}
+
+/// Cross-check the wallet's locally folded Merkle tree against the chain.
+///
+/// The wallet never asks anyone for a path: it pages the commitment chunk
+/// feed and folds the tree itself, so a fold bug (wrong leaf hash, wrong
+/// ordering, a missed chunk) would surface only when the pool rejected the
+/// spend proof several steps later, with `UnknownRoot` and no hint as to
+/// which note was wrong. This pins it at the point of insertion.
+///
+/// The pool is the source of truth, and `isKnownRoot` is the exact predicate
+/// a spend is checked against — it accepts any root in the ring, so a wallet
+/// trailing the tip by a few advances still passes, which is normal while the
+/// indexer catches up.
+///
+/// Deliberately not a by-commitment lookup against the relayer: asking a
+/// server for the path to a specific cm tells it which note is about to be
+/// spent, which is the pattern the chunk feed exists to avoid. The SDK
+/// dropped its `path(cm)` client for that reason.
+export async function assertMerkleConsistency(w: Wallet, cms: string[]): Promise<void> {
+    const masp = maspReader();
     const notes = w.file.notes;
+    // Every commitment in one tx folds into the same root; check each
+    // distinct one once rather than issuing an eth_call per output.
+    const checked = new Set<string>();
     for (const cm of cms) {
         const stored = notes.find((n) => n.cm === cm);
         if (!stored) throw new Error(`assertMerkleConsistency: note not found for cm=${cm}`);
-        const local = w.treeStore.getPath(stored.leafIndex);
-        const remote = await fmd.fetchPath(cm);
-        if (local.root !== remote.root)
-            throw new Error(`Merkle root mismatch for cm=${cm}: local=${local.root} remote=${remote.root}`);
-        for (let i = 0; i < local.pathIndices.length; i++) {
-            if (local.pathIndices[i] !== remote.pathIndices[i])
-                throw new Error(`pathIndices[${i}] mismatch for cm=${cm}`);
-        }
-        for (let i = 0; i < local.pathElements.length; i++) {
-            for (let j = 0; j < local.pathElements[i].length; j++) {
-                if (local.pathElements[i][j] !== remote.pathElements[i][j])
-                    throw new Error(`pathElements[${i}][${j}] mismatch for cm=${cm}`);
-            }
+        const rootHex = cmToHex(w.treeStore.getPath(stored.leafIndex).root);
+        if (checked.has(rootHex)) continue;
+        checked.add(rootHex);
+        if (!((await masp.isKnownRoot(rootHex)) as boolean)) {
+            throw new Error(
+                `local tree root ${rootHex} is not a known root on-chain ` +
+                    `(cm=${cm}, leafIndex=${stored.leafIndex}) — the wallet's folded ` +
+                    `tree disagrees with the pool`,
+            );
         }
     }
 }
@@ -73,13 +99,13 @@ export async function awaitBalance(
     asset: bigint,
     opts: { timeoutMs?: number; pollMs?: number; syncLimit?: number } = {},
 ): Promise<bigint> {
-    const timeoutMs = opts.timeoutMs ?? 150_000;
-    const pollMs = opts.pollMs ?? 2000;
-    const syncLimit = opts.syncLimit ?? 200;
+    const timeoutMs = opts.timeoutMs ?? TIMEOUT.BALANCE_POLL_MS;
+    const pollMs = opts.pollMs ?? POLL.COMMITMENT.pollMs;
+    const syncLimit = opts.syncLimit ?? SYNC_LIMIT;
     return pollUntil(
         async () => {
             await w.sync({ limit: syncLimit });
-            const b = w.balance(asset);
+            const b = w.balance(assetId(asset));
             return b > 0n ? b : null;
         },
         { label: `balance(asset=${asset})`, timeoutMs, intervalMs: pollMs },

@@ -6,19 +6,19 @@ import { beforeAll, describe, it } from "vitest";
 import { env } from "../../src/env.js";
 import {
     ASSET,
-    baseAmt,
     counter,
     expectRevert,
-    fundPayerForAsset,
     type Harness,
     makeWallet,
     newAuxRng,
+    REVERT,
     rngForOutput,
-    setupHarness,
-    submitIntentDirect,
+    submitDepositDirect,
     TEST_NSK,
+    TEST_TIMEOUT,
     withFee,
 } from "../../src/harness.js";
+import { setupFile } from "../../src/fixture.js";
 import { expiredPermitDeadline } from "../../src/negative.js";
 
 const { alice: NSK } = TEST_NSK.negExpired;
@@ -27,11 +27,10 @@ describe("negative: expired Permit2 deadline", () => {
     let h: Harness;
 
     beforeAll(async () => {
-        h = await setupHarness();
-        await fundPayerForAsset(h, ASSET, withFee(50n));
+        ({ h } = await setupFile({ fund: [{ asset: ASSET, amount: withFee(50n) }] }));
     });
 
-    it("submitIntent reverts when deadline < block.timestamp", async () => {
+    it("deposit reverts when deadline < block.timestamp", async () => {
         const rng = counter(0xe1_0001n);
         const aux = newAuxRng(0xe1_0002n);
         const alice = makeWallet(h.P, h.J, NSK);
@@ -43,18 +42,18 @@ describe("negative: expired Permit2 deadline", () => {
                 rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(),
                 aux: rngForOutput(aux),
             },
-            output1Pad: { rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng() },
         });
         await expectRevert(
-            submitIntentDirect({
+            submitDepositDirect({
                 payer: h.payer,
-                intent: built.intent,
+                deposit: built.deposit,
                 aux: built.aux,
                 tokenAddr: env.token2,
-                maxTotal: baseAmt(50n) + (baseAmt(50n) * 500n) / 10000n,
+                // Correctly sized, so the only thing wrong is the deadline.
+                maxTotal: withFee(50n),
                 deadline: expiredPermitDeadline(),
             }),
-            /SignatureExpired|expired|deadline/i,
+            REVERT.PERMIT2_EXPIRED,
         );
-    }, 240_000);
+    }, TEST_TIMEOUT.SPEND);
 });
