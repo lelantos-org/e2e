@@ -7,6 +7,7 @@ import {
     ASSET,
     awaitOwn,
     awaitRecipient,
+    errorText,
     REVERT,
     TEST_NSK,
     TEST_TIMEOUT,
@@ -43,9 +44,7 @@ describe("edge: concurrent spends of one note", () => {
         expect(fulfilled.length, "exactly one spend lands").toBe(1);
         expect(rejected.length).toBe(1);
 
-        const reason = rejected[0].reason;
-        const message = `${reason?.message ?? ""} || ${String(reason)}`;
-        expect(message).toMatch(REVERT.NULLIFIER_CONTESTED);
+        expect(errorText(rejected[0].reason)).toMatch(REVERT.NULLIFIER_CONTESTED);
 
         // The decisive property, and the reason a rejection alone is not
         // enough: one note in, one credit out. Sync bob against the winner

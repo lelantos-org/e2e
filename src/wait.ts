@@ -27,6 +27,7 @@ export async function awaitOwn(
     await w.awaitCommitments(r.ownCommitments, opts);
     await w.treeStore.sync();
     await assertMerkleConsistency(w, r.ownCommitments);
+    await advanceOneBlock();
 }
 
 /// Wait for the tx's recipient-side commitments — the non-own subset of
@@ -39,17 +40,40 @@ export async function awaitRecipient(
     await w.awaitCommitments(recipientCommitments(r), opts);
     await w.treeStore.sync();
     await assertMerkleConsistency(w, recipientCommitments(r));
+    await advanceOneBlock();
 }
 
+let _provider: ethers.JsonRpcProvider | undefined;
 let _masp: ethers.Contract | undefined;
 
+function provider(): ethers.JsonRpcProvider {
+    return (_provider ??= new ethers.JsonRpcProvider(env.rpcUrl));
+}
+
 function maspReader(): ethers.Contract {
-    _masp ??= new ethers.Contract(
-        env.maspAddress,
-        MASP_ABI,
-        new ethers.JsonRpcProvider(env.rpcUrl),
-    );
+    _masp ??= new ethers.Contract(env.maspAddress, MASP_ABI, provider());
     return _masp;
+}
+
+/// Move the chain on by one block once a note has landed.
+///
+/// The SDK's coin selector will not spend a note until the tip has advanced
+/// past the block it was first seen in (`DEFAULT_COOLDOWN_BLOCKS`), so that a
+/// note cannot be spent in the same block it appeared — spending instantly is
+/// a linkability signal.
+///
+/// On a live chain the tip moves by itself within seconds. Anvil only mines
+/// when a transaction arrives, so a note that lands in the latest block stays
+/// at `tip - firstSeenBlock == 0` indefinitely and the next spend fails with
+/// "in spend cooldown" — an artefact of the test chain standing still, not of
+/// the behaviour under test. Mining one block stands in for the passage of
+/// time, so `awaitOwn` continues to mean "landed *and* spendable".
+async function advanceOneBlock(): Promise<void> {
+    try {
+        await provider().send("anvil_mine", ["0x1"]);
+    } catch {
+        // not anvil — a real chain advances on its own
+    }
 }
 
 /// Cross-check the wallet's locally folded Merkle tree against the chain.

@@ -120,7 +120,7 @@ export async function expectRevert(
     }
     if (opts.match !== undefined) {
         const re = typeof opts.match === "string" ? new RegExp(opts.match) : opts.match;
-        const haystack = collectMessage(err);
+        const haystack = errorText(err);
         if (!re.test(haystack)) throw failure(`reject did not match ${re} — got: ${haystack}`, err);
     }
     return err;
@@ -170,12 +170,29 @@ const KNOWN_SELECTORS: Record<string, string> = Object.fromEntries(
     KNOWN_ERROR_SIGNATURES.map((sig) => [ethers.id(sig).slice(0, 10).toLowerCase(), sig]),
 );
 
-function collectMessage(e: Error): string {
+/// Every scrap of text an error carries: its own message, ethers' `reason` /
+/// `shortMessage`, an HTTP `body`, raw revert `data` (with known selectors
+/// decoded), and the same again down the `cause` chain.
+///
+/// Assertions match against this rather than `err.message`, because where a
+/// reason lands moves between library versions — the SDK's `NetworkError` has
+/// carried the server's response text in both places across releases.
+export function errorText(e: Error): string {
     const parts: string[] = [];
     let cur: Error | undefined = e;
     while (cur && parts.length < 8) {
-        const c = cur as Error & { reason?: string; shortMessage?: string; data?: unknown; cause?: unknown };
-        for (const v of [c.message, c.reason, c.shortMessage]) {
+        const c = cur as Error & {
+            reason?: string;
+            shortMessage?: string;
+            data?: unknown;
+            body?: unknown;
+            cause?: unknown;
+        };
+        // `body` is the server's response text. The SDK's `NetworkError` used
+        // to fold it into the message and now keeps it as its own field, so a
+        // relayer's "nullifier already spent" is only reachable here — reading
+        // both means an assertion does not care which the SDK is doing.
+        for (const v of [c.message, c.reason, c.shortMessage, c.body]) {
             if (typeof v === "string") parts.push(v);
         }
         if (typeof c.data === "string") {

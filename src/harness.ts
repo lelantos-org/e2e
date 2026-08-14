@@ -309,6 +309,6 @@ export {
 // module, and routing it back through the barrel would make the cycle load-
 // order sensitive. Tests import it directly from `../src/fixture.js`.
 export { payerEthSigner } from "./signers.js";
-export { cmToHex, counter, expectRevert, nfToHex, pollUntil } from "./utils.js";
+export { cmToHex, counter, errorText, expectRevert, nfToHex, pollUntil } from "./utils.js";
 export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";
 export { createTestWallet, TEST_NSK } from "./wallet.js";
