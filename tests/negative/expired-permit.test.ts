@@ -1,11 +1,11 @@
 // SDK Wallet clamps deadline to `now+3600`; use direct-submit to backdate.
 
-import { buildDeposit } from "@lelantos-org/sdk";
 import { beforeAll, describe, it } from "vitest";
 
 import { env } from "../../src/env.js";
 import {
     ASSET,
+    buildDeposit,
     counter,
     expectRevert,
     type Harness,

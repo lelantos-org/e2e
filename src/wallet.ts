@@ -1,12 +1,12 @@
 import {
     type EthSigner,
-    type Field,
     InMemoryNoteStore,
     nodeWallet,
     TRANSACT_3X3,
     ViemChainAdapter,
     type Wallet,
 } from "@lelantos-org/sdk";
+import type { Field } from "@lelantos-org/sdk/crypto";
 
 import { RELAYER } from "./accounts.js";
 import { TREE_DEPTH } from "./constants.js";

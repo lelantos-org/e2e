@@ -2,21 +2,12 @@ import { expect } from "vitest";
 
 import { ethers } from "ethers";
 
-import {
-    buildSpendingKey,
-    detectionKeyFor,
-    type Field,
-    FmdClient,
-    type FmdDetectionKey,
-    type FmdFlagKey,
-    fmdFlagKeyFromDetection,
-    type FmdNoteOut,
-    type Jubjub,
-    type Note,
-    type OutputRecipient,
-    type Poseidon,
-    type SpendingKey,
-} from "@lelantos-org/sdk";
+import type { OutputRecipient } from "@lelantos-org/sdk/bundle";
+import type { Field, Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
+import { type FmdDetectionKey, type FmdFlagKey, fmdFlagKeyFromDetection } from "@lelantos-org/sdk/fmd";
+import { FmdClient, type FmdNoteOut } from "@lelantos-org/sdk/fmd-server";
+import { buildSpendingKey, detectionKeyFor, type SpendingKey } from "@lelantos-org/sdk/keys";
+import type { Note } from "@lelantos-org/sdk/notes";
 
 import {
     ASSET, FMD_GAMMA, LIST_LIMIT, MASP_ABI, MOCK_ERC20_ABI, MOCK_WETH9_ABI, N_OUT, TIMEOUT,

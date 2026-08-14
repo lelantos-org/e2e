@@ -1,7 +1,6 @@
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { buildDeposit } from "@lelantos-org/sdk";
 import type { DepositPhase, SpendPhase } from "@lelantos-org/sdk/wallet";
 
 import { env } from "../src/env.js";
@@ -12,6 +11,7 @@ import {
     awaitOwn,
     awaitRecipient,
     baseAmt,
+    buildDeposit,
     counter,
     createTestWallet,
     type Erc20Helpers,

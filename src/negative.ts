@@ -1,4 +1,5 @@
-import type { AuxOutput, DepositRequest, InputSlot } from "@lelantos-org/sdk";
+import type { InputSlot } from "@lelantos-org/sdk/bundle";
+import type { AuxOutput, DepositRequest } from "@lelantos-org/sdk/protocol";
 
 // Flip one bit so `verifyProof`'s pairing fails. A deposit occupies one leaf,
 // so `outCm` is a single commitment rather than the old pair.

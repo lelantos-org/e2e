@@ -2,7 +2,6 @@
 // tx (DepositFlushed × N + RootAdvanced with inserted = N — a deposit occupies
 // exactly one leaf now that the zero-value pad output is gone).
 
-import { buildDeposit, type Field } from "@lelantos-org/sdk";
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -10,7 +9,9 @@ import { env } from "../src/env.js";
 import {
     amt,
     ASSET,
+    buildDeposit,
     counter,
+    type Field,
     type Harness,
     makeWallet,
     MASP_ABI,

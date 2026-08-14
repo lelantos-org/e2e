@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 
-import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk";
+import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk/crypto";
 
 export function bytesToHex(b: Uint8Array): string {
     let h = "0x";

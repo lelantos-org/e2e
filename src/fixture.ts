@@ -2,7 +2,8 @@
 // anything, and how a file expresses a multi-step story without leaking state
 // between sibling `it`s.
 
-import type { AssetId, Field, Wallet } from "@lelantos-org/sdk";
+import type { AssetId, Wallet } from "@lelantos-org/sdk";
+import type { Field } from "@lelantos-org/sdk/crypto";
 
 import { fundPayerForAsset, setupHarness, type Harness } from "./harness.js";
 import type { Erc20Helpers } from "./scenario.js";

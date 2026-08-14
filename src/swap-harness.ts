@@ -10,12 +10,8 @@
 
 import { ethers } from "ethers";
 
-import {
-    type EvmAddress,
-    fetchSwapQuote,
-    type SwapQuote,
-    type SwapQuoteRequest,
-} from "@lelantos-org/sdk";
+import type { EvmAddress } from "@lelantos-org/sdk";
+import { fetchSwapQuote, type SwapQuote, type SwapQuoteRequest } from "@lelantos-org/sdk/quoter";
 
 import { MOCK_QUOTER_V2_ABI, MOCK_SWAP_ROUTER_ABI } from "./constants.js";
 import { env } from "./env.js";

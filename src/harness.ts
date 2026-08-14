@@ -2,16 +2,11 @@ import { createRequire } from "node:module";
 
 import { ethers } from "ethers";
 
-import {
-    type AuxOutput,
-    computePiHash,
-    type DepositRequest,
-    FmdClient,
-    Jubjub,
-    Poseidon,
-    RelayerClient,
-    signPermit2Witness,
-} from "@lelantos-org/sdk";
+import { Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
+import { FmdClient } from "@lelantos-org/sdk/fmd-server";
+import { signPermit2Witness } from "@lelantos-org/sdk/permit2";
+import { type AuxOutput, computePiHash, type DepositRequest } from "@lelantos-org/sdk/protocol";
+import { RelayerClient } from "@lelantos-org/sdk/relayer";
 
 import { RELAYER } from "./accounts.js";
 import { ASSET, MASP_ABI, MASP_DEPOSIT_ABI, TIMEOUT, TREE_DEPTH } from "./constants.js";
@@ -277,13 +272,12 @@ export async function waitForBatchFlushTx(args: {
 }
 
 // SDK re-exports — kept here so tests import everything from `./harness`.
-export {
-    assetId,
-    buildNoteCommitment,
-    circuitAmount,
-    type Note,
-    TRANSACT_3X3,
-} from "@lelantos-org/sdk";
+// 0.11 split the root export into per-area subpaths; these are grouped by the
+// subpath each symbol now lives in.
+export { assetId, circuitAmount, TRANSACT_3X3 } from "@lelantos-org/sdk";
+export { buildDeposit } from "@lelantos-org/sdk/bundle";
+export { buildNoteCommitment, type Field } from "@lelantos-org/sdk/crypto";
+export type { Note } from "@lelantos-org/sdk/notes";
 export type { SpendableCachedNote } from "@lelantos-org/sdk/circuit";
 export {
     DepositAdapterError,

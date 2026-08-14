@@ -98,9 +98,7 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
     /// swapped anyway, so the request is not quietly lying about the trade.
     const quoteForSwap = () =>
         quoteSwap(s, {
-            // The metaquoter's request shape takes a JS number, unlike the
-            // circuit/PI paths which are all bigint.
-            chainId: Number(env.chainId),
+            chainId: env.chainId,
             tokenIn: env.token2,
             tokenOut: env.token3,
             amountIn: WRAPPER_AMOUNT_IN,
