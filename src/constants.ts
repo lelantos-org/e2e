@@ -38,6 +38,10 @@ export const TIMEOUT = {
     POLL_DEFAULT_MS: 120_000,
     BATCH_FLUSH_MS: 150_000,
     BALANCE_POLL_MS: 150_000,
+    /// How long to watch for a deposit's flush event. Several relayer ticks
+    /// (`flush_interval_s`), so a deposit that just missed one is covered.
+    /// Advisory only — the note-cache poll is what decides pass or fail.
+    DEPOSIT_FLUSH_MS: 60_000,
 } as const;
 
 /// Per-`it` budgets, passed as vitest's timeout argument. Named by what the

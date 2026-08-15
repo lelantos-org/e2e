@@ -7,6 +7,7 @@ import { ethers } from "ethers";
 import { assetId, type TransactionResult, type Wallet } from "@lelantos-org/sdk";
 
 import { MASP_ABI, POLL, type PollOpts, SYNC_LIMIT, TIMEOUT } from "./constants.js";
+import { watchDepositFlush } from "./deposit-flush.js";
 import { env } from "./env.js";
 import { recipientCommitments } from "./scenario.js";
 import { cmToHex, pollUntil } from "./utils.js";
@@ -24,7 +25,7 @@ export async function awaitOwn(
     r: TransactionResult,
     opts: PollOpts = pollForKind(r.kind),
 ): Promise<void> {
-    await w.awaitCommitments(r.ownCommitments, opts);
+    await awaitCommitted(w, r, r.ownCommitments, opts);
     await w.treeStore.sync();
     await assertMerkleConsistency(w, r.ownCommitments);
     await advanceOneBlock();
@@ -37,10 +38,47 @@ export async function awaitRecipient(
     r: TransactionResult,
     opts: PollOpts = pollForKind(r.kind),
 ): Promise<void> {
-    await w.awaitCommitments(recipientCommitments(r), opts);
+    await awaitCommitted(w, r, recipientCommitments(r), opts);
     await w.treeStore.sync();
     await assertMerkleConsistency(w, recipientCommitments(r));
     await advanceOneBlock();
+}
+
+/// Wait for `cms` to reach `w`'s note cache, failing with a message that says
+/// which stage stalled.
+///
+/// For a deposit the poll spans two services — the relayer's flush and the
+/// indexer's pickup — so a bare timeout cannot say which stalled. Watching the
+/// flush event alongside it splits that into "the relayer never flushed" or
+/// "it flushed, and the indexer never surfaced the note".
+async function awaitCommitted(
+    w: Wallet,
+    r: TransactionResult,
+    cms: string[],
+    opts: PollOpts,
+): Promise<void> {
+    // Watched concurrently, never awaited before the poll: the flush only
+    // explains a failure, so blocking on it would put an advisory signal on
+    // the critical path and charge every deposit its timeout whenever an
+    // event is missed.
+    const watch =
+        r.kind === "deposit" && r.depositId !== undefined
+            ? watchDepositFlush(r.depositId)
+            : undefined;
+
+    try {
+        const seen = await w.awaitCommitments(cms, opts);
+        if (seen.status === "seen") return;
+
+        const stage = watch ? ` — ${await watch.explain()}` : "";
+        throw new Error(
+            `${r.kind} ${r.txHash}: ${seen.missing.length}/${cms.length} commitments never ` +
+                `reached the note cache after ${seen.attempts} attempts${stage}. ` +
+                `missing: ${seen.missing.join(", ")}`,
+        );
+    } finally {
+        watch?.close();
+    }
 }
 
 let _provider: ethers.JsonRpcProvider | undefined;
