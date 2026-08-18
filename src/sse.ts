@@ -20,8 +20,10 @@ const CLOSED = 2;
 const FRAME_SEPARATOR = "\n\n";
 const DATA_PREFIX = "data:";
 
-/// Extract a frame's payload. `:`-prefixed lines are comments — the relayer's
-/// keepalive heartbeat is one, and carries no data.
+/**
+ * Extract a frame's payload. `:`-prefixed lines are comments — the relayer's
+ * keepalive heartbeat is one, and carries no data.
+ */
 function payloadOf(frame: string): string {
     return frame
         .split("\n")

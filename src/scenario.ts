@@ -65,9 +65,11 @@ export function rngForOutput(rng: () => Field): { esk: Field; fmdR: Field } {
     return { esk: rng(), fmdR: rng() };
 }
 
-/// Pad a spend's outputs up to the circuit's `nOut` with zero-value notes back
-/// to `self`. `buildSpend` takes exactly `nOut` outputs and enforces the balance
-/// equation, so the pads must carry value 0 and their own fresh randomness.
+/**
+ * Pad a spend's outputs up to the circuit's `nOut` with zero-value notes back
+ * to `self`. `buildSpend` takes exactly `nOut` outputs and enforces the balance
+ * equation, so the pads must carry value 0 and their own fresh randomness.
+ */
 export function padOutputs(
     self: CircuitWallet,
     outputs: readonly Note[],
@@ -143,9 +145,11 @@ export async function waitForAdvance(
     }, { label: `tree_advance(${startIndex})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
 }
 
-/// The three accounts every ERC-20 balance assertion in the suite tracks:
-/// where the money comes from, where it is held while shielded, and where it
-/// lands on the way out. Lazily read so `env` is not touched at import time.
+/**
+ * The three accounts every ERC-20 balance assertion in the suite tracks:
+ * where the money comes from, where it is held while shielded, and where it
+ * lands on the way out. Lazily read so `env` is not touched at import time.
+ */
 export const trackedAddrs = (): Record<string, string> => ({
     payer: env.payerAddress,
     masp: env.maspAddress,
@@ -165,12 +169,14 @@ export async function snapshotBalances(
 
 let _feeView: ethers.Contract | undefined;
 
-/// Fees the pool has accrued for `tokenAddr`, in base units.
-///
-/// Always assert this with `toBeGreaterThanOrEqual`: the counter is cumulative
-/// across the whole run and every test file shares one MASP, so any file that
-/// deposits or withdraws the same asset raises it. An exact assertion here
-/// would encode the file ordering into the test.
+/**
+ * Fees the pool has accrued for `tokenAddr`, in base units.
+ *
+ * Always assert this with `toBeGreaterThanOrEqual`: the counter is cumulative
+ * across the whole run and every test file shares one MASP, so any file that
+ * deposits or withdraws the same asset raises it. An exact assertion here
+ * would encode the file ordering into the test.
+ */
 export async function accruedFee(
     provider: ethers.Provider,
     tokenAddr: string,

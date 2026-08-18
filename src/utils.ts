@@ -170,13 +170,15 @@ const KNOWN_SELECTORS: Record<string, string> = Object.fromEntries(
     KNOWN_ERROR_SIGNATURES.map((sig) => [ethers.id(sig).slice(0, 10).toLowerCase(), sig]),
 );
 
-/// Every scrap of text an error carries: its own message, ethers' `reason` /
-/// `shortMessage`, an HTTP `body`, raw revert `data` (with known selectors
-/// decoded), and the same again down the `cause` chain.
-///
-/// Assertions match against this rather than `err.message`, because where a
-/// reason lands moves between library versions — the SDK's `NetworkError` has
-/// carried the server's response text in both places across releases.
+/**
+ * Every scrap of text an error carries: its own message, ethers' `reason` /
+ * `shortMessage`, an HTTP `body`, raw revert `data` (with known selectors
+ * decoded), and the same again down the `cause` chain.
+ *
+ * Assertions match against this rather than `err.message`, because where a
+ * reason lands moves between library versions — the SDK's `NetworkError` has
+ * carried the server's response text in both places across releases.
+ */
 export function errorText(e: Error): string {
     const parts: string[] = [];
     let cur: Error | undefined = e;

@@ -10,6 +10,18 @@ export const CIRCUITS_DIR = resolve(E2E_DIR, "circuits");
 export const VENDOR_DIR = resolve(E2E_DIR, "vendor");
 export const CONTRACTS_DIR = resolve(VENDOR_DIR, "contracts");
 
+/**
+ * Where per-service logs are written.
+ *
+ * Both sinks that produce them — `runService`'s live stream and `Stack.down`'s
+ * final `docker logs` dump — must agree on this. They used to default
+ * independently and drifted apart, so CI (which uploads only `E2E_LOG_DIR`)
+ * collected half of them.
+ */
+export function logDir(): string {
+    return process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
+}
+
 // Hostname matches the `postgres` network alias set in `services.ts`.
 export const DB_URL = "postgres://postgres:postgres@postgres:5432/postgres";
 
@@ -32,30 +44,36 @@ export const BASE_RUST_ENV = {
 
 export const DEFAULT_STARTUP_MS = 60_000;
 
-/// How long the suite's internal polls wait before giving up. Not per-test
-/// budgets — those are `TEST_TIMEOUT`.
+/**
+ * How long the suite's internal polls wait before giving up. Not per-test
+ * budgets — those are `TEST_TIMEOUT`.
+ */
 export const TIMEOUT = {
     POLL_DEFAULT_MS: 120_000,
     BATCH_FLUSH_MS: 150_000,
     BALANCE_POLL_MS: 150_000,
-    /// How long to watch for a deposit's flush event. Several relayer ticks
-    /// (`flush_interval_s`), so a deposit that just missed one is covered.
-    /// Advisory only — the note-cache poll is what decides pass or fail.
+    /**
+     * How long to watch for a deposit's flush event. Several relayer ticks
+     * (`flush_interval_s`), so a deposit that just missed one is covered.
+     * Advisory only — the note-cache poll is what decides pass or fail.
+     */
     DEPOSIT_FLUSH_MS: 60_000,
 } as const;
 
-/// Per-`it` budgets, passed as vitest's timeout argument. Named by what the
-/// test actually waits on, so a slow CI run is retuned in one place.
+/**
+ * Per-`it` budgets, passed as vitest's timeout argument. Named by what the
+ * test actually waits on, so a slow CI run is retuned in one place.
+ */
 export const TEST_TIMEOUT = {
-    /// One spend: proof + chain inclusion + indexer pickup.
+    /** One spend: proof + chain inclusion + indexer pickup. */
     SPEND: 240_000,
-    /// A swap — as above plus the relayer-flushed second leg.
+    /** A swap — as above plus the relayer-flushed second leg. */
     SWAP: 360_000,
-    /// A multi-transaction narrative inside a single `it`.
+    /** A multi-transaction narrative inside a single `it`. */
     SEQUENCE: 600_000,
-    /// Reads settled state only; no chain round trip.
+    /** Reads settled state only; no chain round trip. */
     LOCAL: 60_000,
-    /// N parallel deposits plus a relayer flush tick.
+    /** N parallel deposits plus a relayer flush tick. */
     BATCH_FLUSH: 240_000,
 } as const;
 
@@ -73,9 +91,11 @@ export interface PollOpts {
     pollMs: number;
 }
 
-/// Picked by `awaitOwn`/`awaitRecipient` based on the tx kind. Override
-/// per-call by passing a `PollOpts` to either helper. `COMMITMENT` covers
-/// the relayer flush window (slow); `SPEND` is the spend pipeline path.
+/**
+ * Picked by `awaitOwn`/`awaitRecipient` based on the tx kind. Override
+ * per-call by passing a `PollOpts` to either helper. `COMMITMENT` covers
+ * the relayer flush window (slow); `SPEND` is the spend pipeline path.
+ */
 export const POLL: Record<"COMMITMENT" | "SPEND", PollOpts> = {
     COMMITMENT: { maxAttempts: 80, pollMs: 2000 },
     SPEND:      { maxAttempts: 60, pollMs: 1500 },
@@ -104,8 +124,10 @@ export const ASSETS = {
 // Default asset for feeFor/baseAmt/withFee.
 export const ASSET: AssetId = ASSETS.MDAI;
 
-/// Circuit-unit amount literal. The SDK wallet takes `CircuitAmount`; tests
-/// deal in whole units, so this is the shorthand at every call site.
+/**
+ * Circuit-unit amount literal. The SDK wallet takes `CircuitAmount`; tests
+ * deal in whole units, so this is the shorthand at every call site.
+ */
 export const amt = (v: bigint): CircuitAmount => circuitAmount(v);
 
 // Burn / non-allowlisted adapter sentinel for negative tests.
@@ -141,10 +163,12 @@ export function withFee(amount: bigint, asset: bigint = ASSET): bigint {
     return amount * scaleFor(asset) + feeFor(amount, asset);
 }
 
-/// Fee in *circuit* units, for amounts that never get scaled to base units —
-/// the debit a withdraw takes off a shielded balance, say. Mirrors the SDK's
-/// `applyFee`; `feeFor` is the base-unit equivalent and scales first, so the
-/// two are not interchangeable (they floor at different magnitudes).
+/**
+ * Fee in *circuit* units, for amounts that never get scaled to base units —
+ * the debit a withdraw takes off a shielded balance, say. Mirrors the SDK's
+ * `applyFee`; `feeFor` is the base-unit equivalent and scales first, so the
+ * two are not interchangeable (they floor at different magnitudes).
+ */
 export function circuitFee(amount: bigint): bigint {
     return (amount * FEE_BPS) / 10_000n;
 }
@@ -202,50 +226,62 @@ export const MOCK_SWAP_ROUTER_ABI = [
     "function nextOut() view returns (uint256)",
 ] as const;
 
-/// Rejection reasons, matched by `expectRevert`.
-///
-/// Each entry names the specific guard its test is about. Where more than one
-/// alternative is listed they are all *named states of that same guard* (the
-/// relayer's pre-check versus the pool's on-chain check, say) — never a
-/// catch-all like `/reverted/i`, which would let a misconfigured harness pass
-/// a negative test without exercising anything.
-///
-/// Contract error names come from `vendor/contracts`; relayer messages from
-/// `AppError` in `vendor/backend/crates/relayer/src/domain/error.rs`. Selectors
-/// are decoded by `KNOWN_SELECTORS` in `utils.ts` for the cases where ethers
-/// surfaces raw `data` from a sub-call.
-///
-/// Note there is no entry for the swap wrapper's guards: the relayer collapses
-/// every submit-time swap revert to an opaque `HTTP 500: internal error`, so
-/// `AdapterNotAllowed` and the router's under-delivery revert never reach a
-/// client. `tests/swap.test.ts` asserts on effects instead, and says so.
+/**
+ * Rejection reasons, matched by `expectRevert`.
+ *
+ * Each entry names the specific guard its test is about. Where more than one
+ * alternative is listed they are all *named states of that same guard* (the
+ * relayer's pre-check versus the pool's on-chain check, say) — never a
+ * catch-all like `/reverted/i`, which would let a misconfigured harness pass
+ * a negative test without exercising anything.
+ *
+ * Contract error names come from `vendor/contracts`; relayer messages from
+ * `AppError` in `vendor/backend/crates/relayer/src/domain/error.rs`. Selectors
+ * are decoded by `KNOWN_SELECTORS` in `utils.ts` for the cases where ethers
+ * surfaces raw `data` from a sub-call.
+ *
+ * Note there is no entry for the swap wrapper's guards: the relayer collapses
+ * every submit-time swap revert to an opaque `HTTP 500: internal error`, so
+ * `AdapterNotAllowed` and the router's under-delivery revert never reach a
+ * client. `tests/swap.test.ts` asserts on effects instead, and says so.
+ */
 export const REVERT = {
-    /// A spend of an already-published nullifier. Two layers can catch it and
-    /// which one does is a timing detail, so both named states are accepted:
-    /// the relayer rejects with `AppError::NullifierAlreadySpent` (HTTP 409,
-    /// `crates/relayer/src/domain/error.rs`) as soon as it has seen the first
-    /// spend, and only a request that gets past it reaches the pool's
-    /// `NullifierSet.DoubleSpend()`. In practice the relayer wins.
+    /**
+     * A spend of an already-published nullifier. Two layers can catch it and
+     * which one does is a timing detail, so both named states are accepted:
+     * the relayer rejects with `AppError::NullifierAlreadySpent` (HTTP 409,
+     * `crates/relayer/src/domain/error.rs`) as soon as it has seen the first
+     * spend, and only a request that gets past it reaches the pool's
+     * `NullifierSet.DoubleSpend()`. In practice the relayer wins.
+     */
     NULLIFIER_SPENT: /nullifier already spent|DoubleSpend/,
-    /// The loser of a race between two spends of one note. Same guard as
-    /// above, but the winner has not been indexed yet, so the relayer reports
-    /// the nullifier as in flight rather than spent. Both outcomes are correct
-    /// and which one appears depends on how far the loser got.
+    /**
+     * The loser of a race between two spends of one note. Same guard as
+     * above, but the winner has not been indexed yet, so the relayer reports
+     * the nullifier as in flight rather than spent. Both outcomes are correct
+     * and which one appears depends on how far the loser got.
+     */
     NULLIFIER_CONTESTED: /nullifier in flight|nullifier already spent|DoubleSpend/,
-    /// Permit2 `InvalidAmount(uint256)` — requestedAmount exceeds the signed
-    /// `permitted.amount` (our `sig.maxTotal`).
+    /**
+     * Permit2 `InvalidAmount(uint256)` — requestedAmount exceeds the signed
+     * `permitted.amount` (our `sig.maxTotal`).
+     */
     PERMIT2_INVALID_AMOUNT: /InvalidAmount/,
-    /// Permit2 `SignatureExpired(uint256)`.
+    /** Permit2 `SignatureExpired(uint256)`. */
     PERMIT2_EXPIRED: /SignatureExpired/,
-    /// `SwapWrapper.AdapterNotAllowed()` — adapter is not on the allowlist.
-    /// Reaches the client as the relayer's `ContractRejected` (HTTP 400),
-    /// which echoes the contract's revert data; the selector is decoded by
-    /// `KNOWN_SELECTORS` in `utils.ts`.
+    /**
+     * `SwapWrapper.AdapterNotAllowed()` — adapter is not on the allowlist.
+     * Reaches the client as the relayer's `ContractRejected` (HTTP 400),
+     * which echoes the contract's revert data; the selector is decoded by
+     * `KNOWN_SELECTORS` in `utils.ts`.
+     */
     ADAPTER_NOT_ALLOWED: /AdapterNotAllowed/,
-    /// The *router* rejects first: `UniV3Adapter` forwards `minOut` as
-    /// `amountOutMinimum`, so `MockSwapRouter02`'s require trips before
-    /// `SwapWrapper.InsufficientOut` is ever reached. Matching the wrapper's
-    /// error here would silently never fire.
+    /**
+     * The *router* rejects first: `UniV3Adapter` forwards `minOut` as
+     * `amountOutMinimum`, so `MockSwapRouter02`'s require trips before
+     * `SwapWrapper.InsufficientOut` is ever reached. Matching the wrapper's
+     * error here would silently never fire.
+     */
     SWAP_UNDER_MIN_OUT: /too little received/,
 } as const;
 

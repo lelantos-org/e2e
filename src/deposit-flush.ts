@@ -14,12 +14,14 @@ import { env } from "./env.js";
 import { nodeEventSource } from "./sse.js";
 
 export interface FlushWatch {
-    /// Settles when the flush is seen, the timeout expires, or the feed dies.
+    /** Settles when the flush is seen, the timeout expires, or the feed dies. */
     settled: Promise<FlushWait>;
-    /// The outcome as one line, for a failure message.
+    /** The outcome as one line, for a failure message. */
     explain(): Promise<string>;
-    /// Drop the stream. Safe once the caller no longer needs the outcome;
-    /// `settled` still resolves (as `"closed"`).
+    /**
+     * Drop the stream. Safe once the caller no longer needs the outcome;
+     * `settled` still resolves (as `"closed"`).
+     */
     close(): void;
 }
 

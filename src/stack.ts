@@ -1,4 +1,6 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -8,10 +10,16 @@ import {
 } from "testcontainers";
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts.js";
-import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, FEE_BPS } from "./constants.js";
+import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, FEE_BPS, logDir } from "./constants.js";
 import { log } from "./utils.js";
 import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2.js";
-import { ANVIL, backendSpecs, POSTGRES, runService } from "./services.js";
+import { ANVIL, backendSpecs, POSTGRES, runService, type ServiceSpec } from "./services.js";
+
+/** A started container plus the service alias its logs should be filed under. */
+interface RunningService {
+    alias: string;
+    container: StartedTestContainer;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -55,17 +63,17 @@ export interface StackEnv extends Urls {
 
 export class Stack {
     private network?: StartedNetwork;
-    private infra: StartedTestContainer[] = []; // [postgres, anvil]
-    private backends: StartedTestContainer[] = [];
+    private postgres?: StartedTestContainer;
+    private anvil?: StartedTestContainer;
+    private backends: RunningService[] = [];
     private addresses?: Addresses;
 
     async up(): Promise<{ rpc: string }> {
         await ensureCircuits();
         this.network = await new Network().start();
 
-        const postgres = await runService(POSTGRES, this.network);
-        const anvil = await runService(ANVIL, this.network);
-        this.infra = [postgres, anvil];
+        this.postgres = await runService(POSTGRES, this.network);
+        this.anvil = await runService(ANVIL, this.network);
 
         // DeployPermit2 in DeployTest.s.sol uses vm.etch which is dropped under
         // --broadcast; MASP ctor reverts ZeroPermit2() without this pre-deploy.
@@ -83,21 +91,7 @@ export class Stack {
             PERMIT2: CANONICAL_PERMIT2_ADDRESS,
         };
 
-        const { stdout: coreOut } = await execFileAsync(
-            "forge",
-            [
-                "script", "script/DeployTest.s.sol:DeployTest",
-                "--rpc-url", rpcUrl,
-                "--private-key", DEPLOYER.privateKey,
-                "--broadcast",
-                "--disable-code-size-limit",
-            ],
-            {
-                cwd: CONTRACTS_DIR,
-                maxBuffer: 64 * 1024 * 1024,
-                env: baseEnv,
-            },
-        );
+        const coreOut = await runForgeScript("DeployTest", rpcUrl, baseEnv);
         this.addresses = parseDeployOutput(coreOut);
 
         // Run DeployTestSwap after core; reads MASP/PERMIT2/TOKEN_* from env.
@@ -112,22 +106,8 @@ export class Stack {
             for (const [id, addr] of Object.entries(this.addresses.tokens)) {
                 swapEnv[`TOKEN_${id}`] = addr;
             }
-            const { stdout: swapOut } = await execFileAsync(
-                "forge",
-                [
-                    "script", "script/DeployTestSwap.s.sol:DeployTestSwap",
-                    "--rpc-url", rpcUrl,
-                    "--private-key", DEPLOYER.privateKey,
-                    "--broadcast",
-                    "--disable-code-size-limit",
-                ],
-                {
-                    cwd: CONTRACTS_DIR,
-                    maxBuffer: 64 * 1024 * 1024,
-                    env: swapEnv,
-                },
-            );
-            const swap = parseSwapOutput(swapOut);
+            const swapOut = await runForgeScript("DeployTestSwap", rpcUrl, swapEnv);
+            const swap = requireSwapAddresses(stripAnsi(swapOut), "swap deploy");
             this.addresses = { ...this.addresses, swap };
         }
         return this.addresses;
@@ -135,24 +115,27 @@ export class Stack {
 
     // Ingester runs alone first (owns schema migrations); the rest start in parallel.
     async upBackend(addrs: Addresses): Promise<Urls> {
-        if (!this.network) throw new Error("upBackend: call up() first");
+        const network = this.network;
+        if (!network) throw new Error("upBackend: call up() first");
         const specs = backendSpecs(addrs.masp, addrs.swap, addrs.nativeAdapter);
 
-        const ingester = await runService(specs.ingester, this.network);
-        this.backends.push(ingester);
+        const start = async (spec: ServiceSpec): Promise<StartedTestContainer> => {
+            const container = await runService(spec, network);
+            this.backends.push({ alias: spec.alias, container });
+            return container;
+        };
 
-        const parallel: Promise<StartedTestContainer>[] = [
-            runService(specs.fmdIndexer, this.network),
-            runService(specs.explorerIndexer, this.network),
-            runService(specs.fmdWeb, this.network),
-            runService(specs.explorerWeb, this.network),
-            runService(specs.relayer, this.network),
+        await start(specs.ingester);
+
+        const rest = [
+            specs.fmdIndexer,
+            specs.explorerIndexer,
+            specs.fmdWeb,
+            specs.explorerWeb,
+            specs.relayer,
+            ...(specs.metaquoter ? [specs.metaquoter] : []),
         ];
-        if (specs.metaquoter) parallel.push(runService(specs.metaquoter, this.network));
-
-        const started = await Promise.all(parallel);
-        const [fmdIndexer, explorerIndexer, fmdWeb, explorerWeb, relayer, metaquoter] = started;
-        this.backends.push(...started);
+        const [, , fmdWeb, explorerWeb, relayer, metaquoter] = await Promise.all(rest.map(start));
 
         return {
             rpc: this.rpcUrl(),
@@ -180,44 +163,136 @@ export class Stack {
     }
 
     async down(): Promise<void> {
-        const fs = await import("node:fs");
-        const { execSync } = await import("node:child_process");
-        // Final `docker logs` dump, written next to the streamed per-service
-        // logs from `runService`. Both sinks used to be needed but landed in
-        // different directories, so CI (which uploads only `E2E_LOG_DIR`) was
-        // collecting half of them; keep them together.
-        const logDir = process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
-        fs.mkdirSync(logDir, { recursive: true });
-        for (const c of this.backends) {
-            try {
-                const id = (c as any).getId?.() ?? "";
-                const name = ((c as any).getName?.() ?? "unknown").replace(/^\//, "");
-                if (!id) continue;
-                const out = execSync(`docker logs ${id} 2>&1 || true`, { maxBuffer: 64 * 1024 * 1024 });
-                fs.writeFileSync(`${logDir}/${name}.docker.log`, out);
-            } catch {}
+        dumpBackendLogs(this.backends);
+
+        await Promise.all(
+            this.allContainers().map((c) =>
+                c.stop().catch((e) => log(`stopping ${c.getName()} failed: ${errText(e)}`)),
+            ),
+        );
+        if (this.network) {
+            await this.network.stop().catch((e) => log(`stopping network failed: ${errText(e)}`));
         }
-        const stops: Promise<unknown>[] = [];
-        for (const c of [...this.backends, ...this.infra]) {
-            stops.push(c.stop().catch(() => {}));
-        }
-        await Promise.all(stops);
-        if (this.network) await this.network.stop().catch(() => {});
+
         this.backends = [];
-        this.infra = [];
+        this.postgres = undefined;
+        this.anvil = undefined;
         this.network = undefined;
         this.addresses = undefined;
     }
 
     private rpcUrl(): string {
-        const anvil = this.infra[1];
-        if (!anvil) throw new Error("anvil not started");
-        return `http://localhost:${anvil.getMappedPort(ANVIL.port!)}`;
+        if (!this.anvil) throw new Error("Stack.rpcUrl: call up() first");
+        return `http://localhost:${this.anvil.getMappedPort(ANVIL.port!)}`;
+    }
+
+    /** Every container this stack owns, backends first so their logs dump first. */
+    private allContainers(): StartedTestContainer[] {
+        return [...this.backends.map((b) => b.container), this.postgres, this.anvil].filter(
+            (c): c is StartedTestContainer => c !== undefined,
+        );
     }
 }
 
 function hostUrl(c: StartedTestContainer, internalPort: number): string {
     return `http://localhost:${c.getMappedPort(internalPort)}`;
+}
+
+function errText(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Final `docker logs` dump, written alongside the per-service streams that
+ * `runService` opens (same `logDir()`, so CI collects both).
+ *
+ * Best-effort: teardown must finish even when a container is already gone, so
+ * every failure is reported and swallowed rather than thrown. Reported, not
+ * silenced — a stack that tears down without leaving logs is exactly the case
+ * where you need to know why.
+ */
+function dumpBackendLogs(backends: readonly RunningService[]): void {
+    const dir = logDir();
+    try {
+        mkdirSync(dir, { recursive: true });
+    } catch (e) {
+        log(`could not create ${dir}: ${errText(e)}`);
+        return;
+    }
+
+    for (const { alias, container } of backends) {
+        try {
+            // spawnSync, not execFileSync: a non-zero exit here is normal (the
+            // container may already be gone) and must not throw away the output
+            // we did get. Both streams are kept — services log to stderr, so
+            // stdout alone would drop most of what makes the dump worth having.
+            const r = spawnSync("docker", ["logs", container.getId()], {
+                maxBuffer: 64 * 1024 * 1024,
+            });
+            if (r.error) throw r.error;
+            const out = Buffer.concat([r.stdout ?? Buffer.alloc(0), r.stderr ?? Buffer.alloc(0)]);
+            writeFileSync(resolve(dir, `${alias}.docker.log`), out);
+        } catch (e) {
+            log(`could not dump logs for ${alias}: ${errText(e)}`);
+        }
+    }
+}
+
+/** Run a forge deploy script from the contracts dir and return its stdout. */
+async function runForgeScript(
+    name: string,
+    rpcUrl: string,
+    env: Record<string, string>,
+): Promise<string> {
+    const { stdout } = await execFileAsync(
+        "forge",
+        [
+            "script", `script/${name}.s.sol:${name}`,
+            "--rpc-url", rpcUrl,
+            "--private-key", DEPLOYER.privateKey,
+            "--broadcast",
+            "--disable-code-size-limit",
+        ],
+        {
+            cwd: CONTRACTS_DIR,
+            maxBuffer: 64 * 1024 * 1024,
+            env,
+        },
+    );
+    return stdout;
+}
+
+// forge colourises its output; the address regexes below run on plain text.
+function stripAnsi(s: string): string {
+    return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** `KEY=0xaddress` pairs from forge script output. */
+function parseAddressPairs(stripped: string): Map<string, string> {
+    const re = /\b([A-Z][A-Z0-9_]*)=(0x[0-9a-fA-F]{40})/g;
+    const found = new Map<string, string>();
+    for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
+    return found;
+}
+
+const SWAP_KEYS = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"] as const;
+
+function readSwapAddresses(found: Map<string, string>): SwapAddresses {
+    return {
+        univ3Quoter: found.get("UNIV3_QUOTER")!,
+        univ3Adapter: found.get("UNIV3_ADAPTER")!,
+        mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
+        wrapper: found.get("SWAP_WRAPPER")!,
+    };
+}
+
+/** All four swap addresses, or throw naming the first missing one. */
+function requireSwapAddresses(stripped: string, what: string): SwapAddresses {
+    const found = parseAddressPairs(stripped);
+    for (const k of SWAP_KEYS) {
+        if (!found.has(k)) throw new Error(`${what}: missing ${k} in forge output:\n${stripped}`);
+    }
+    return readSwapAddresses(found);
 }
 
 // Relayer mounts <e2e>/circuits/ at /circuits and reads tree_update_batch.{wasm,r1cs,_final.zkey}
@@ -227,29 +302,9 @@ async function ensureCircuits(): Promise<void> {
     await execFileAsync("scripts/fetch-circuits.sh", [], { cwd: E2E_DIR });
 }
 
-function parseSwapOutput(stdout: string): SwapAddresses {
-    const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-    const re = /\b(UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
-    const found = new Map<string, string>();
-    for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
-    const need = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"];
-    for (const k of need) {
-        if (!found.has(k)) throw new Error(`swap deploy: missing ${k} in forge output:\n${stripped}`);
-    }
-    return {
-        univ3Quoter: found.get("UNIV3_QUOTER")!,
-        univ3Adapter: found.get("UNIV3_ADAPTER")!,
-        mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
-        wrapper: found.get("SWAP_WRAPPER")!,
-    };
-}
-
 function parseDeployOutput(stdout: string): Addresses {
-    const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, "");
-    const re =
-        /\b(TREE_UPDATE_BATCH_VERIFIER|VERIFIER|MASP|TOKEN_\d+|WRAPPED_NATIVE|NATIVE_ADAPTER|PERMIT2|UNIV3_QUOTER|UNIV3_ADAPTER|MOCK_SWAP_ROUTER|SWAP_WRAPPER)=(0x[0-9a-fA-F]{40})/g;
-    const found = new Map<string, string>();
-    for (const m of stripped.matchAll(re)) found.set(m[1], m[2]);
+    const stripped = stripAnsi(stdout);
+    const found = parseAddressPairs(stripped);
 
     for (const k of ["VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"]) {
         if (!found.has(k)) {
@@ -263,16 +318,11 @@ function parseDeployOutput(stdout: string): Addresses {
         if (m) tokens[Number(m[1])] = v;
     }
 
-    let swap: SwapAddresses | undefined;
-    const swapKeys = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"];
-    if (swapKeys.every((k) => found.has(k))) {
-        swap = {
-            univ3Quoter: found.get("UNIV3_QUOTER")!,
-            univ3Adapter: found.get("UNIV3_ADAPTER")!,
-            mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
-            wrapper: found.get("SWAP_WRAPPER")!,
-        };
-    } else if (swapKeys.some((k) => found.has(k))) {
+    // The core script emits swap addresses only when it deployed them. All four
+    // or none — a partial set means the script changed shape and the caller
+    // would otherwise get an object with `undefined` fields typed as `string`.
+    const swapPresent = SWAP_KEYS.filter((k) => found.has(k));
+    if (swapPresent.length !== 0 && swapPresent.length !== SWAP_KEYS.length) {
         throw new Error(`deploy: partial swap addresses in forge output:\n${stripped}`);
     }
 
@@ -284,6 +334,6 @@ function parseDeployOutput(stdout: string): Addresses {
         wrappedNative: found.get("WRAPPED_NATIVE"),
         nativeAdapter: found.get("NATIVE_ADAPTER"),
         permit2: found.get("PERMIT2")!,
-        swap,
+        swap: swapPresent.length === SWAP_KEYS.length ? readSwapAddresses(found) : undefined,
     };
 }

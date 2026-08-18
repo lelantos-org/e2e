@@ -19,6 +19,7 @@ import {
     DB_URL,
     DEFAULT_STARTUP_MS,
     FEE_BPS,
+    logDir,
     PORT,
 } from "./constants.js";
 import type { SwapAddresses } from "./stack.js";
@@ -214,9 +215,9 @@ export async function runService(
     }
 
     // Container is reaped on failure; persist logs so traces survive.
-    const logDir = process.env.E2E_LOG_DIR ?? "/tmp/e2e-logs";
-    mkdirSync(logDir, { recursive: true });
-    const sink = createWriteStream(resolve(logDir, `${spec.alias}.log`), { flags: "a" });
+    const dir = logDir();
+    mkdirSync(dir, { recursive: true });
+    const sink = createWriteStream(resolve(dir, `${spec.alias}.log`), { flags: "a" });
     c = c.withLogConsumer(async (stream) => {
         stream.on("data", (line) => sink.write(line));
         stream.on("err", (line) => sink.write(line));

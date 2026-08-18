@@ -150,15 +150,17 @@ export interface SubmitDepositResult {
 
 // Bypasses SDK Wallet: used by negative tests that need malformed inputs and
 // by batch-flush which fires N submits without waiting for cm indexation.
-/// Fresh Permit2 nonce, unique per call.
-///
-/// Permit2 nonces are an unordered bitmap: any unused value works, but a
-/// repeat reverts `InvalidNonce()`. Deriving one from `Date.now()` alone
-/// collides whenever two deposits are signed inside the same millisecond —
-/// which is exactly what `batch-flush` does when it fires N submits through
-/// `Promise.all`, so it failed only sometimes. The counter makes it
-/// deterministic; the timestamp seed keeps separate runs against the same
-/// anvil from reusing each other's slots.
+/**
+ * Fresh Permit2 nonce, unique per call.
+ *
+ * Permit2 nonces are an unordered bitmap: any unused value works, but a
+ * repeat reverts `InvalidNonce()`. Deriving one from `Date.now()` alone
+ * collides whenever two deposits are signed inside the same millisecond —
+ * which is exactly what `batch-flush` does when it fires N submits through
+ * `Promise.all`, so it failed only sometimes. The counter makes it
+ * deterministic; the timestamp seed keeps separate runs against the same
+ * anvil from reusing each other's slots.
+ */
 let permit2Nonce = BigInt(Date.now()) << 8n;
 function nextPermit2Nonce(): bigint {
     return permit2Nonce++;

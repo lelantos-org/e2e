@@ -37,19 +37,23 @@ export const TEST_NSK = {
     edgeConcurrent: { alice: 0xed_a1ce_a11c0n, bob: 0xed_b0b_b0b00n },
 } as const;
 
-/// Wallets built by `createTestWallet` that have not been disposed yet.
-///
-/// SDK 0.18 gave `Wallet` a `dispose()`, and the whole suite runs in one fork
-/// (`singleFork`, see `vitest.config.ts`), so every wallet's scanner and prover
-/// stay resident for the rest of the run unless something releases them. Test
-/// files build wallets in `beforeAll` and ad hoc inside `it`s, so the registry
-/// tracks them centrally and `src/test-setup.ts` drains it after each file.
+/**
+ * Wallets built by `createTestWallet` that have not been disposed yet.
+ *
+ * SDK 0.18 gave `Wallet` a `dispose()`, and the whole suite runs in one fork
+ * (`singleFork`, see `vitest.config.ts`), so every wallet's scanner and prover
+ * stay resident for the rest of the run unless something releases them. Test
+ * files build wallets in `beforeAll` and ad hoc inside `it`s, so the registry
+ * tracks them centrally and `src/test-setup.ts` drains it after each file.
+ */
 const live = new Set<Wallet>();
 
-/// Dispose every wallet built since the last drain.
-///
-/// `dispose()` is idempotent on the SDK side, and a failure here must not fail
-/// an otherwise-green file, so rejections are collected and reported once.
+/**
+ * Dispose every wallet built since the last drain.
+ *
+ * `dispose()` is idempotent on the SDK side, and a failure here must not fail
+ * an otherwise-green file, so rejections are collected and reported once.
+ */
 export async function disposeTestWallets(): Promise<void> {
     const wallets = [...live];
     live.clear();

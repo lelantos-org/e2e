@@ -14,8 +14,10 @@ import { env } from "./env.js";
 
 let _payer: EthSigner | undefined;
 
-/// Lazy `EthSigner` over `env.payerKey`. Reused per-process so the SDK
-/// adapter and direct-submit helpers all touch the same instance.
+/**
+ * Lazy `EthSigner` over `env.payerKey`. Reused per-process so the SDK
+ * adapter and direct-submit helpers all touch the same instance.
+ */
 export function payerEthSigner(): EthSigner {
     _payer ??= new PrivateKeySigner(env.payerKey as Hex, env.rpcUrl, env.chainId);
     return _payer;
