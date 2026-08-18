@@ -22,6 +22,9 @@ export default defineConfig({
         poolOptions: { forks: { singleFork: true } },
         sequence: { shuffle: false, sequencer: PathSequencer },
         globalSetup: ["./src/setup.ts"],
+        // Per-file teardown: release the wallets that file built. Runs inside
+        // the fork, unlike `globalSetup`.
+        setupFiles: ["./src/test-setup.ts"],
         reporters: process.env.CI
             ? ["verbose", ["junit", { outputFile: "./test-results.xml" }]]
             : ["verbose"],
