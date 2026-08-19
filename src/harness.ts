@@ -13,6 +13,7 @@ import { ASSET, MASP_ABI, MASP_DEPOSIT_ABI, TIMEOUT, TREE_DEPTH } from "./consta
 import { env } from "./env.js";
 import { type Erc20Helpers, ExplorerClient, setupErc20, setupWeth } from "./scenario.js";
 import { payerEthSigner } from "./signers.js";
+import { rpcProvider, SerialWallet, settleNonce } from "./tx.js";
 import { counter, pollUntil } from "./utils.js";
 
 const resolve = createRequire(import.meta.url).resolve;
@@ -81,14 +82,18 @@ export async function fundPayerForAsset(
 export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
     const P = await (_P ??= Poseidon.build());
     const J = await (_J ??= Jubjub.build());
-    const provider = new ethers.JsonRpcProvider(env.rpcUrl);
+    const provider = rpcProvider(env.rpcUrl);
     // Vitest reuses one anvil; flush so file N's nonce query is not stale.
     await flushMempool(provider);
-    // Plain ethers.Wallet — fetches `pending` nonce from anvil on every send.
-    // We can't use NonceManager here because the SDK's viem PrivateKeySigner
-    // independently sends txs from the same account; cached NonceManager
-    // diverges from chain state and trips "nonce too low".
-    const payer = new ethers.Wallet(env.payerKey, provider);
+    // `SerialWallet` re-reads the `pending` nonce from anvil on every send —
+    // no local cache, because the SDK's viem PrivateKeySigner sends from the
+    // same account and a NonceManager's counter would diverge from chain state
+    // and trip "nonce too low". What it adds over a plain Wallet is a
+    // process-wide send queue plus a retry when an SDK send wins the race
+    // anyway (see `tx.ts`).
+    const payer = new SerialWallet(env.payerKey, provider);
+    // ...and don't start until the previous file's txs have left the pool.
+    await settleNonce(provider, payer.address);
     const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
     const relayer = new RelayerClient(env.relayerUrl);
     const fmd = new FmdClient(env.fmdUrl, env.chainId);

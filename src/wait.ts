@@ -10,6 +10,7 @@ import { MASP_ABI, POLL, type PollOpts, SYNC_LIMIT, TIMEOUT } from "./constants.
 import { watchDepositFlush } from "./deposit-flush.js";
 import { env } from "./env.js";
 import { recipientCommitments } from "./scenario.js";
+import { rpcProvider } from "./tx.js";
 import { cmToHex, pollUntil } from "./utils.js";
 
 /**
@@ -93,7 +94,8 @@ let _provider: ethers.JsonRpcProvider | undefined;
 let _masp: ethers.Contract | undefined;
 
 function provider(): ethers.JsonRpcProvider {
-    return (_provider ??= new ethers.JsonRpcProvider(env.rpcUrl));
+    // `rpcProvider` disables ethers' 250ms `_perform` cache — see `tx.ts`.
+    return (_provider ??= rpcProvider(env.rpcUrl));
 }
 
 function maspReader(): ethers.Contract {
