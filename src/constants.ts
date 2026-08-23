@@ -1,10 +1,12 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { type AssetId, assetId, type CircuitAmount, circuitAmount } from "@lelantos-org/sdk";
 
 export const CHAIN_ID = "31337";
 
-export const E2E_DIR = resolve(__dirname, "..");
+// This package is ESM ("type": "module"), where `__dirname` does not exist.
+export const E2E_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const CONFIG_DIR = resolve(E2E_DIR, "config");
 export const CIRCUITS_DIR = resolve(E2E_DIR, "circuits");
 export const VENDOR_DIR = resolve(E2E_DIR, "vendor");
@@ -181,8 +183,6 @@ export const MASP_ABI = [
     "function feeBps() view returns (uint16)",
     "function treasury() view returns (address)",
     "function accruedFee(address) view returns (uint256)",
-    "function verifyProof(tuple(uint256[2] a, uint256[2][2] b, uint256[2] c) p, tuple(bytes32 merkleRoot, bytes32[3] nullifier, bytes32[3] outCm, uint64 publicAssetId, uint64 publicIn, uint64 publicOut, uint256[2][3] inCv, uint256[2][3] outCv, address recipient, uint256 chainId, address payer, address relayer, uint256[2][3] outCvDep) pi, tuple(uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[3] aux) view returns (bool)",
-    "function VERIFIER() view returns (address)",
     "event DepositFlushed(uint256 indexed id, bytes32 cm)",
     "event NotePayload(bytes32 indexed cm, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint256 cvDepX, uint256 cvDepY)",
     "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",

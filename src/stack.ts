@@ -306,7 +306,7 @@ function parseDeployOutput(stdout: string): Addresses {
     const stripped = stripAnsi(stdout);
     const found = parseAddressPairs(stripped);
 
-    for (const k of ["VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"]) {
+    for (const k of ["SPEND_VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"]) {
         if (!found.has(k)) {
             throw new Error(`deploy: missing ${k} in forge output:\n${stripped}`);
         }
@@ -327,7 +327,7 @@ function parseDeployOutput(stdout: string): Addresses {
     }
 
     return {
-        verifier: found.get("VERIFIER")!,
+        verifier: found.get("SPEND_VERIFIER")!,
         treeUpdateVerifier: found.get("TREE_UPDATE_BATCH_VERIFIER")!,
         masp: found.get("MASP")!,
         tokens,

@@ -6,13 +6,16 @@ export const CANONICAL_PERMIT2_ADDRESS =
     "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let cached: string | undefined;
 
 export function permit2Bytecode(): string {
     if (cached) return cached;
-    cached = readFileSync(resolve(__dirname, "permit2.bytecode.hex"), "utf8").trim();
+    // ESM: no `__dirname`. The hex sits next to this source file.
+    const here = dirname(fileURLToPath(import.meta.url));
+    cached = readFileSync(resolve(here, "permit2.bytecode.hex"), "utf8").trim();
     return cached;
 }
 
