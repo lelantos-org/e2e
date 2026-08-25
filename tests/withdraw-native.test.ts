@@ -7,6 +7,9 @@ import {
     ASSETS,
     awaitOwn,
     baseAmt,
+    depositFeePaid,
+    feePaid,
+    scaleFor,
     feeFor,
     type Erc20Helpers,
     type Harness,
@@ -17,7 +20,6 @@ import {
 } from "../src/harness.js";
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
-const { alice: ALICE_NSK } = TEST_NSK.withdrawNative;
 const ASSET_WETH = ASSETS.WETH;
 const DEPOSIT_WETH = amt(20n);
 const WITHDRAW_WETH = amt(8n);
@@ -61,7 +63,8 @@ describe("withdraw native ETH (WETH unwrap)", () => {
         const before = await snap();
         const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
         await awaitOwn(alice, r);
-        return { before, after: await snap() };
+        const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+        return { before, relayerFee, after: await snap() };
     });
 
     const withdrawn = once(async () => {
@@ -73,23 +76,28 @@ describe("withdraw native ETH (WETH unwrap)", () => {
             asset: ASSET_WETH,
         });
         await awaitOwn(alice, r);
-        return { before, after: await snap() };
+        return { before, fee: feePaid(r), after: await snap() };
     });
 
     it("deposit WETH (shield leg)", async () => {
-        const { before, after } = await deposited();
-        const moved = baseAmt(DEPOSIT_WETH, ASSET_WETH) + SHIELD_FEE;
+        const { before, relayerFee, after } = await deposited();
+        const moved =
+            baseAmt(DEPOSIT_WETH, ASSET_WETH) +
+            SHIELD_FEE +
+            relayerFee * scaleFor(ASSET_WETH);
         expect(after.weth.payer - before.weth.payer).toBe(-moved);
         expect(after.weth.masp - before.weth.masp).toBe(moved);
         expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
     }, TEST_TIMEOUT.SPEND);
 
     it("withdrawEth — recipient receives raw ETH (no WETH delta)", async () => {
-        const { before, after } = await withdrawn();
+        const { before, fee, after } = await withdrawn();
         expect(after.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);
         expect(after.weth.recipient - before.weth.recipient, "arrives as coin, not token").toBe(0n);
         expect(before.weth.masp - after.weth.masp).toBe(NET_WITHDRAW);
-        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH);
+        // The relayer's fee stays in the pool as a note, so it never appears
+        // in the public deltas above — only in what alice has left.
+        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
     }, TEST_TIMEOUT.SPEND);
 
     it("MASP accrues shield + unshield fees in WETH", async () => {

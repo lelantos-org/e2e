@@ -1,12 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { TransactionResult } from "@lelantos-org/sdk";
+import type { TransactionResult, TransferResult } from "@lelantos-org/sdk";
 
 import {
     amt,
     ASSET,
     awaitOwn,
     awaitRecipient,
+    feePaid,
     errorText,
     REVERT,
     TEST_NSK,
@@ -16,6 +17,10 @@ import {
 import { setupFile, type SdkWallet } from "../../src/fixture.js";
 
 const DEPOSIT = amt(40n);
+// Below the deposit: each spend also funds a note paying the relayer, so a
+// wallet can never send its whole balance. Both racers ask for the same
+// amount, which is what makes them contend for the same input note.
+const SEND = amt(30n);
 
 describe("edge: concurrent spends of one note", () => {
     let alice: SdkWallet;
@@ -35,8 +40,8 @@ describe("edge: concurrent spends of one note", () => {
         // Coin selector picks the same input twice; the loser hits the
         // nullifier guard.
         const results = await Promise.allSettled([
-            alice.transfer({ to: bob.address, amount: DEPOSIT, asset: ASSET }),
-            alice.transfer({ to: bob.address, amount: DEPOSIT, asset: ASSET }),
+            alice.transfer({ to: bob.address, amount: SEND, asset: ASSET }),
+            alice.transfer({ to: bob.address, amount: SEND, asset: ASSET }),
         ]);
 
         const fulfilled = results.filter((r) => r.status === "fulfilled");
@@ -53,7 +58,14 @@ describe("edge: concurrent spends of one note", () => {
         // twice.
         const winner = (fulfilled[0] as PromiseFulfilledResult<TransactionResult>).value;
         await awaitRecipient(bob, winner);
-        expect(bob.balance(ASSET), "credited exactly once").toBe(DEPOSIT);
-        expect(alice.balance(ASSET), "the note is spent, not double-spent").toBe(0n);
+        // Alice keeps change now that a spend cannot consume her whole
+        // balance, so her side has to be waited on too.
+        await awaitOwn(alice, winner);
+        expect(bob.balance(ASSET), "credited exactly once").toBe(SEND);
+        // The input note is gone and alice keeps the change, less the fee the
+        // winning spend paid the relayer.
+        expect(alice.balance(ASSET), "the note is spent, not double-spent").toBe(
+            DEPOSIT - SEND - feePaid(winner as TransferResult),
+        );
     }, TEST_TIMEOUT.SWAP);
 });

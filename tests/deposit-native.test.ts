@@ -12,6 +12,9 @@ import {
     type Harness,
     TEST_NSK,
     TEST_TIMEOUT,
+    depositFeePaid,
+    feePaid,
+    scaleFor,
     withFee,
 } from "../src/harness.js";
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
@@ -30,7 +33,10 @@ import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 const ASSET_WETH = ASSETS.WETH;
 const DEPOSIT = amt(15n);
 const FEE = feeFor(DEPOSIT, ASSET_WETH);
-const TOTAL = withFee(DEPOSIT, ASSET_WETH); // what the pool pulls: amount + fee
+// What the pool pulls for the principal and the protocol fee. The relayer's
+// fee note is pulled on top and is only known once the deposit has landed, so
+// it is added per-test from the deposit's own event.
+const PRINCIPAL_PLUS_FEE = withFee(DEPOSIT, ASSET_WETH);
 
 const WITHDRAW = amt(4n);
 // A withdraw debits the shielded balance by the amount plus its circuit-unit
@@ -99,20 +105,24 @@ describe.skipIf(!env.nativeAdapterAddress)(
             const before = await snap();
             const r = await alice.deposit({ amount: DEPOSIT, asset: ASSET_WETH, asEth: true });
             await awaitOwn(alice, r);
-            return { before, after: await snap(), r };
+            const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+            return { before, relayerFee, after: await snap(), r };
         });
 
         it("shields raw ETH: payer spends coin, pool gains WETH, note is the depositor's", async () => {
-            const { before, after, r } = await deposited();
+            const { before, relayerFee, after, r } = await deposited();
+            // The adapter wraps whatever the pool asks for, so the payer's coin
+            // covers the relayer's fee note too.
+            const total = PRINCIPAL_PLUS_FEE + relayerFee * scaleFor(ASSET_WETH);
 
             // Paid in coin, not in token: the adapter did the wrapping. Deltas
             // rather than absolutes — files share one anvil and one payer account,
             // so earlier files may have left a WETH balance behind.
-            expect(after.payerEth - before.payerEth).toBe(-(TOTAL + (await gasCost(r.txHash))));
+            expect(after.payerEth - before.payerEth).toBe(-(total + (await gasCost(r.txHash))));
             expect(after.payerWeth - before.payerWeth, "no WETH left the payer").toBe(0n);
 
             // The pool ends up holding the wrapped deposit plus its fee.
-            expect(after.maspWeth - before.maspWeth).toBe(TOTAL);
+            expect(after.maspWeth - before.maspWeth).toBe(total);
 
             // Escrowed by the adapter, credited to Alice.
             expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT);
@@ -145,7 +155,9 @@ describe.skipIf(!env.nativeAdapterAddress)(
                 asset: ASSET_WETH,
             });
             await awaitOwn(alice, r);
-            expect(before - alice.balance(ASSET_WETH)).toBe(WITHDRAW_DEBIT);
+            // The unshield fee leaves the pool; the relayer's fee stays in it
+            // as a note. Both come out of alice's balance.
+            expect(before - alice.balance(ASSET_WETH)).toBe(WITHDRAW_DEBIT + feePaid(r));
         }, TEST_TIMEOUT.SPEND);
     },
 );

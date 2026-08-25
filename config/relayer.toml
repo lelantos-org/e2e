@@ -15,11 +15,30 @@ signer_key_hex = "0x000000000000000000000000000000000000000000000000000000000000
 receipt_timeout_s = 60
 flush_interval_s = 5
 
+# Shielded fees are ON for this stack. Setting the address turns on *both*
+# paths: a spend must carry an output note to it, and a deposit's second leaf
+# must be a note the relayer can decrypt — otherwise it declines to flush and
+# the payer cancels. Address and viewing key are derived from one nsk and
+# supplied via RELAYER_CHAIN_<id>_SHIELDED_FEE_{ADDRESS,IVK}; see
+# `src/protocol/shielded-fee.ts`.
+#
+# Rendered at boot with the addresses forge just deployed — see
+# `src/infra/relayer-config.ts`. Every token quotes in USD because the oracle
+# stub serves exactly one pair.
+# @ACCEPTED_FEE_TOKENS@
+
+[price_oracle]
+# Static file server, not Coinbase. A live feed would make every fee assertion
+# depend on the market at the moment CI ran, and would need egress from CI.
+# See `config/oracle/README.md`.
+base_url = "http://oracle"
+cache_ttl_s = 1
+
 [prover]
 # Mounted from <e2e>/circuits/ by services.ts (populated via scripts/fetch-circuits.sh).
 wasm_path = "/circuits/tree_update_batch.wasm"
 r1cs_path = "/circuits/tree_update_batch.r1cs"
 zkey_path = "/circuits/tree_update_batch_final.zkey"
-# Transact circuit verification key. Lets the relayer reject a bad wallet
+# Transact circuit verification key (4x4 — must match the deployed verifier). Lets the relayer reject a bad wallet
 # proof before it spends a tree_update_batch Groth16 on it.
-transact_vkey_path = "/circuits/3x3_verification_key.json"
+transact_vkey_path = "/circuits/4x4_verification_key.json"

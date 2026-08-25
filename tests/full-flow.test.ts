@@ -26,18 +26,25 @@ import {
     REVERT,
     rngForOutput,
     snapshotBalances,
+    unflushableFee,
     submitDepositDirect,
     SYNC_LIMIT,
     TEST_NSK,
     TEST_TIMEOUT,
     trackedAddrs,
+    depositFeePaid,
+    feePaid,
+    depositTotal,
     withFee,
 } from "../src/harness.js";
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
 const { alice: ALICE_NSK, bob: BOB_NSK } = TEST_NSK.fullFlow;
 
-const DEPOSIT = 105n;
+// Sized with room for the relayer's shielded fee on each spend leg: the
+// transfer and the withdraw each pay one, and a wallet can never spend its
+// whole balance because the fee note comes out of the same inputs.
+const DEPOSIT = 125n;
 const TO_BOB = 60n;
 // SDK `amount` on a withdraw is net-to-recipient; publicOut = amount + fee.
 const WITHDRAW_NET = 40n;
@@ -53,6 +60,10 @@ describe("masp e2e flow", () => {
     // absolute count would only hold when this file happened to run first,
     // and vitest orders files differently cold vs. warm-cache.
     let leavesAtStart: bigint;
+
+    /// Mirrors `PubInputs.LEAVES_PER_DEPOSIT`: the depositor's note plus the
+    /// note paying whoever flushes it.
+    const LEAVES_PER_DEPOSIT = 2n;
 
     const leavesSinceStart = async (): Promise<bigint> =>
         ((await h.masp.committedCount()) as bigint) - leavesAtStart;
@@ -82,7 +93,10 @@ describe("masp e2e flow", () => {
             onPhase: (p) => phases.push(p),
         });
         await awaitOwn(alice, r);
-        return { before, phases, leaves: await leavesSinceStart() };
+        // What the deposit actually escrowed for the relayer, read from its
+        // own event — the payer was debited for it on top of principal + fee.
+        const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+        return { before, phases, relayerFee, leaves: await leavesSinceStart() };
     });
 
     const transferred = once(async () => {
@@ -97,7 +111,7 @@ describe("masp e2e flow", () => {
         });
         await awaitOwn(alice, r);
         await awaitRecipient(bob, r);
-        return { before, phases, leaves: await leavesSinceStart() };
+        return { before, phases, fee: feePaid(r), leaves: await leavesSinceStart() };
     });
 
     const withdrawn = once(async () => {
@@ -109,23 +123,27 @@ describe("masp e2e flow", () => {
             asset: ASSET,
         });
         await awaitOwn(alice, r);
-        return { before, leaves: await leavesSinceStart() };
+        return { before, fee: feePaid(r), leaves: await leavesSinceStart() };
     });
 
-    it("deposit: 105 units, alice gets a note", async () => {
-        const { before, phases, leaves } = await deposited();
+    it("deposit: alice gets a note for the full amount", async () => {
+        const { before, phases, relayerFee, leaves } = await deposited();
         expect(phases).toEqual(["signing", "submitting", "broadcast", "mined"]);
 
-        const moved = withFee(DEPOSIT);
+        // Three amounts leave the payer: principal, the pool's protocol fee,
+        // and the note paying whoever flushes the batch.
+        const moved = depositTotal(DEPOSIT, relayerFee);
         await expectBalanceDeltas(erc20, trackedAddrs(), before, { payer: -moved, masp: moved });
 
         expect(alice.balance(ASSET)).toBe(DEPOSIT);
-        // A deposit occupies exactly one leaf.
-        expect(leaves, "leaves added by the deposit").toBe(1n);
+        // A deposit occupies two leaves: alice's note and the note paying
+        // whoever flushed the batch. Only the first is alice's, which is why
+        // her balance above is the full deposit and not a leaf count.
+        expect(leaves, "leaves added by the deposit").toBe(LEAVES_PER_DEPOSIT);
     }, TEST_TIMEOUT.SPEND);
 
-    it("shielded transfer: alice sends 60 to bob, keeps 40 change", async () => {
-        const { before, phases, leaves } = await transferred();
+    it("shielded transfer: alice sends 60 to bob, keeps the rest as change", async () => {
+        const { before, phases, fee, leaves } = await transferred();
         expect(phases).toEqual(["preparing", "proving", "submitting"]);
 
         // A shielded transfer moves no public token at all.
@@ -133,14 +151,18 @@ describe("masp e2e flow", () => {
             payer: 0n, masp: 0n, recipient: 0n,
         });
 
-        expect(alice.balance(ASSET)).toBe(DEPOSIT - TO_BOB);
+        // The relayer's fee comes out of alice's inputs, not bob's note.
+        expect(alice.balance(ASSET)).toBe(DEPOSIT - TO_BOB - fee);
         expect(bob.balance(ASSET)).toBe(TO_BOB);
         // 1 deposit leaf + N_OUT spend leaves.
-        expect(leaves, "leaves after deposit + transfer").toBe(BigInt(1 + N_OUT));
+        expect(leaves, "leaves after deposit + transfer").toBe(
+            LEAVES_PER_DEPOSIT + BigInt(N_OUT),
+        );
     }, TEST_TIMEOUT.SPEND);
 
     it("withdraw: alice unshields 40 (net) to a public address", async () => {
-        const { before, leaves } = await withdrawn();
+        const { before, fee, leaves } = await withdrawn();
+        const { fee: transferFee } = await transferred();
 
         // Contract fee is on publicOut*scale: recipient = publicOut*scale*(1-feeBps).
         const recipientNet = baseAmt(WITHDRAW_PUBLIC_OUT) - feeFor(WITHDRAW_PUBLIC_OUT);
@@ -150,8 +172,13 @@ describe("masp e2e flow", () => {
             recipient: recipientNet,
         });
 
-        expect(alice.balance(ASSET)).toBe(DEPOSIT - TO_BOB - WITHDRAW_PUBLIC_OUT);
-        expect(leaves, "leaves after deposit + transfer + withdraw").toBe(BigInt(1 + 2 * N_OUT));
+        // Both spend legs paid the relayer out of alice's own inputs.
+        expect(alice.balance(ASSET)).toBe(
+            DEPOSIT - TO_BOB - WITHDRAW_PUBLIC_OUT - transferFee - fee,
+        );
+        expect(leaves, "leaves after deposit + transfer + withdraw").toBe(
+            LEAVES_PER_DEPOSIT + BigInt(2 * N_OUT),
+        );
     }, TEST_TIMEOUT.SPEND);
 
     it("deposit reverts when Permit2 maxTotal cannot cover principal + fee", async () => {
@@ -172,12 +199,14 @@ describe("masp e2e flow", () => {
             publicIn: 50n,
             recipient: aliceLegacy.recipient,
             output0: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(), aux: rngForOutput(auxRng) },
+            fee: unflushableFee(aliceLegacy.recipient, { rng: aliceRng, auxRng }),
         });
         await expectRevert(
             submitDepositDirect({
                 payer: h.payer,
                 deposit: built.deposit,
                 aux: built.aux,
+                feeAux: built.feeAux,
                 tokenAddr: env.token2,
                 maxTotal: baseAmt(50n), // principal only — short by the fee
             }),

@@ -6,7 +6,8 @@ import { ethers } from "ethers";
 
 import { assetId, type TransactionResult, type Wallet } from "@lelantos-org/sdk";
 
-import { MASP_ABI, POLL, type PollOpts, SYNC_LIMIT, TIMEOUT } from "./constants.js";
+import { MASP_ABI } from "./protocol/abi.js";
+import { POLL, type PollOpts, SYNC_LIMIT, TIMEOUT, VIEM_BLOCK_CACHE_MS } from "./testkit/timeouts.js";
 import { watchDepositFlush } from "./deposit-flush.js";
 import { env } from "./env.js";
 import { recipientCommitments } from "./scenario.js";
@@ -45,9 +46,10 @@ export async function awaitRecipient(
     r: TransactionResult,
     opts: PollOpts = pollForKind(r.kind),
 ): Promise<void> {
-    await awaitCommitted(w, r, recipientCommitments(r), opts);
+    const expected = recipientCommitments(r);
+    await awaitCommitted(w, r, expected, opts);
     await w.treeStore.sync();
-    await assertMerkleConsistency(w, recipientCommitments(r));
+    await assertMerkleConsistency(w, expected);
     await advanceOneBlock();
 }
 
@@ -76,8 +78,8 @@ async function awaitCommitted(
             : undefined;
 
     try {
-        const seen = await w.awaitCommitments(cms, opts);
-        if (seen.status === "seen") return;
+        const seen = await pollForCommitments(w, cms, opts);
+        if (seen.missing.length === 0) return;
 
         const stage = watch ? ` — ${await watch.explain()}` : "";
         throw new Error(
@@ -88,6 +90,44 @@ async function awaitCommitted(
     } finally {
         watch?.close();
     }
+}
+
+/**
+ * Poll a wallet's cache for `cms`, syncing with *our* page size.
+ *
+ * Deliberately not `Wallet.awaitCommitments`, which does the same loop but
+ * syncs with a hardcoded `AWAIT_COMMITMENTS_SYNC_LIMIT = 200` and exposes no
+ * way to raise it. Every test file shares one fmd index, and a fee-paying
+ * suite fills it fast — a deposit writes two leaves and a fee-paying spend
+ * fills every output slot — so past 200 notes that sync stops reaching the
+ * newest page. The commitment is on chain and in the index, and the wait times
+ * out anyway.
+ *
+ * The tell is that it passes in isolation and fails partway through a full
+ * run, moving to a different test each time.
+ */
+async function pollForCommitments(
+    w: Wallet,
+    cms: string[],
+    opts: PollOpts,
+): Promise<{ missing: string[]; attempts: number }> {
+    const target = cms.map((c) => c.toLowerCase());
+    const missing = (): string[] => {
+        const seen = new Set(w.notes().map((n) => n.cm.toLowerCase()));
+        return target.filter((c) => !seen.has(c));
+    };
+
+    let attempts = 0;
+    for (; attempts < opts.maxAttempts; attempts++) {
+        if (missing().length === 0) break;
+        await w.sync({ limit: SYNC_LIMIT });
+        if (missing().length === 0) {
+            attempts += 1;
+            break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, opts.pollMs));
+    }
+    return { missing: missing(), attempts };
 }
 
 let _provider: ethers.JsonRpcProvider | undefined;
@@ -120,13 +160,31 @@ function maspReader(): ethers.Contract {
  * Mining explicitly makes the advance immediate and deterministic instead of
  * racing the block timer, so `awaitOwn` means "landed *and* spendable" the
  * moment it returns.
+ *
+ * # Why it also sleeps
+ *
+ * Mining alone is not enough. The SDK builds its viem client as
+ * `createPublicClient({ transport: http(rpcUrl) })` with no `cacheTime`, so
+ * viem's default applies and `getBlockNumber` is served from cache for
+ * `pollingInterval` (4s). The selector compares a note's block against that
+ * cached tip, and with `--block-time=1` the cached value can trail the chain by
+ * several blocks — so a note that has been on chain for four blocks still reads
+ * as `tip - firstSeenBlock < 1` and is refused as "in spend cooldown".
+ *
+ * Freshly mined blocks do not help, because the staleness is in the *reader*,
+ * not the chain. Waiting out the cache window is what makes the next read
+ * honest. e2e already does the equivalent for ethers — `rpcProvider` disables
+ * its 250ms `_perform` cache (see `tx.ts`) — but the SDK's client is not ours
+ * to configure.
  */
 async function advanceOneBlock(): Promise<void> {
     try {
-        await provider().send("anvil_mine", ["0x1"]);
+        await provider().send("anvil_mine", ["0x2"]);
     } catch {
         // not anvil — a real chain advances on its own
+        return;
     }
+    await new Promise((resolve) => setTimeout(resolve, VIEM_BLOCK_CACHE_MS + 250));
 }
 
 /**

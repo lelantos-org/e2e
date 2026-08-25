@@ -16,13 +16,16 @@ import {
     CHAIN_ID,
     CIRCUITS_DIR,
     CONFIG_DIR,
+    ORACLE_DIR,
     DB_URL,
     DEFAULT_STARTUP_MS,
-    FEE_BPS,
     logDir,
     PORT,
-} from "./constants.js";
-import type { SwapAddresses } from "./stack.js";
+} from "./infra/docker.js";
+import { FEE_BPS } from "./protocol/amounts.js";
+import { type FeeTokenSpec, renderRelayerConfig } from "./infra/relayer-config.js";
+import { RELAYER_FEE_ADDRESS, RELAYER_FEE_IVK } from "./protocol/shielded-fee.js";
+import type { SwapAddresses } from "./infra/addresses.js";
 
 // `configFile` resolves against CONFIG_DIR (config file bind mount).
 // `hostPath` is an absolute host path (used for directory mounts like circuits).
@@ -83,11 +86,38 @@ export interface BackendServices {
     metaquoter?: ServiceSpec;
 }
 
-export function backendSpecs(
-    masp: string,
-    swap?: SwapAddresses,
-    nativeAdapter?: string,
-): BackendServices {
+/**
+ * Static price feed for the relayer's fee quotes.
+ *
+ * nginx over `config/oracle`, whose tree is laid out as the paths
+ * `CoinbaseOracle` requests. `resp.json()` does not check content-type, so
+ * files served as `application/octet-stream` parse fine.
+ */
+export const ORACLE: ServiceSpec = {
+    image: "nginx:alpine",
+    alias: "oracle",
+    mounts: [{ hostPath: ORACLE_DIR, target: "/usr/share/nginx/html" }],
+    wait: Wait.forLogMessage(/start worker processes/),
+};
+
+/** Everything the backend containers need that only exists after the deploy. */
+export interface BackendSpecArgs {
+    masp: string;
+    /** Mirrored into the relayer's `accepted_fee_tokens`; see `assets.ts`. */
+    feeTokens: FeeTokenSpec[];
+    /** Absent when the stack was brought up with `E2E_SKIP_SWAP=1`. */
+    swap?: SwapAddresses;
+    /** Absent when no wrapped-native token was deployed. */
+    nativeAdapter?: string;
+}
+
+export function backendSpecs({
+    masp,
+    feeTokens,
+    swap,
+    nativeAdapter,
+}: BackendSpecArgs): BackendServices {
+    const relayerConfigPath = renderRelayerConfig(feeTokens);
     const services: BackendServices = {
         ingester: {
             image: "lelantos/ingester:dev",
@@ -152,10 +182,17 @@ export function backendSpecs(
                 ...(nativeAdapter
                     ? { [`RELAYER_CHAIN_${CHAIN_ID}_NATIVE_ADAPTER_ADDRESS`]: nativeAdapter }
                     : {}),
+                // Turning these on makes the relayer charge for spends *and*
+                // deposits. Derived from one nsk so the address and the key
+                // cannot disagree — the relayer refuses to boot if they do.
+                [`RELAYER_CHAIN_${CHAIN_ID}_SHIELDED_FEE_ADDRESS`]: RELAYER_FEE_ADDRESS,
+                [`RELAYER_CHAIN_${CHAIN_ID}_SHIELDED_FEE_IVK`]: RELAYER_FEE_IVK,
                 RUST_LOG: "info",
             },
             mounts: [
-                { configFile: "relayer.toml", target: "/etc/relayer.toml" },
+                // Rendered, not the committed file: `accepted_fee_tokens`
+                // carries addresses that only exist after the forge deploy.
+                { hostPath: relayerConfigPath, target: "/etc/relayer.toml" },
                 { hostPath: CIRCUITS_DIR, target: "/circuits" },
             ],
             port: PORT.RELAYER,

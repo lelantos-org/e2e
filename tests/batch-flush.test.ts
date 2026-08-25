@@ -1,6 +1,12 @@
-// Asserts the relayer drains N pending DepositEscrowed events into one flushBatch
-// tx (DepositFlushed × N + RootAdvanced with inserted = N — a deposit occupies
-// exactly one leaf now that the zero-value pad output is gone).
+// Asserts the relayer drains N pending DepositEscrowed events into one
+// flushBatch tx: DepositFlushed × N, and RootAdvanced with inserted = 2N,
+// because a deposit occupies two leaves — the depositor's note and the note
+// paying whoever flushed it.
+//
+// N is the contract's ceiling, not an arbitrary number. `MAX_L_BATCH = 4`
+// counts leaves and is pinned by the batch circuit's `COUNT_BITS = 2`, so one
+// flush carries at most `4 / 2 = 2` deposits. A larger N here cannot land in a
+// single tx and the test would fail on a limit rather than on a regression.
 
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -11,26 +17,28 @@ import {
     ASSET,
     buildDeposit,
     counter,
-    type Field,
     type Harness,
     makeWallet,
     MASP_ABI,
     newAuxRng,
     parseContractLogs,
     rngForOutput,
+    quoteDepositFee,
+    relayerFeeNote,
     submitDepositDirect,
     TEST_NSK,
     type CircuitWallet,
     TEST_TIMEOUT,
-    TIMEOUT,
     waitForBatchFlushTx,
     waitForCm,
+    depositTotal,
+    FEE_HEADROOM,
     withFee,
 } from "../src/harness.js";
 import { setupFile } from "../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.batchFlush;
-const N = 3;
+const N = 2;
 const DEPOSIT_AMT = amt(10n);
 // `retry: 2` below means up to three attempts, each burning N deposits.
 // `beforeAll` does not re-run between retries, so fund for all of them —
@@ -47,7 +55,12 @@ describe("batch flush", () => {
         // No `nsks`: this file drives the circuit builders directly rather than
         // the SDK `Wallet`, so it needs a raw key bundle, not a wallet handle.
         ({ h } = await setupFile({
-            fund: [{ asset: ASSET, amount: withFee(DEPOSIT_AMT * BigInt(N) * ATTEMPTS) }],
+            fund: [
+                {
+                    asset: ASSET,
+                    amount: withFee(DEPOSIT_AMT * BigInt(N) * ATTEMPTS + FEE_HEADROOM),
+                },
+            ],
         }));
         alice = makeWallet(h.P, h.J, ALICE_NSK);
     });
@@ -89,6 +102,9 @@ describe("batch flush", () => {
         // fire submits in parallel so all N DepositEscrowed land before the
         // next 5s flush tick — otherwise the relayer drains them across
         // multiple batches and the "single flushBatch" assertion fails.
+        // One quote for all N: the amount is per-deposit, and asking once
+        // keeps every deposit in this batch priced identically.
+        const feeValue = await quoteDepositFee(h.relayer, env.chainId, ASSET);
         const builts = Array.from({ length: N }, () =>
             buildDeposit({
                 ...h.bundleCommon(),
@@ -101,6 +117,9 @@ describe("batch flush", () => {
                     rcvDep: aliceRng(),
                     aux: rngForOutput(auxRng),
                 },
+                // Pays the relayer: this test asserts a flush happens, and a
+                // fee note addressed anywhere else is skipped forever.
+                fee: relayerFeeNote(h.J, feeValue, { rng: aliceRng, auxRng }),
             }),
         );
         // Wrap h.payer in a per-test NonceManager so the N parallel sends
@@ -113,8 +132,9 @@ describe("batch flush", () => {
                     payer: noncedPayer,
                     deposit: built.deposit,
                     aux: built.aux,
+                    feeAux: built.feeAux,
                     tokenAddr: env.token2,
-                    maxTotal: withFee(DEPOSIT_AMT),
+                    maxTotal: depositTotal(DEPOSIT_AMT, feeValue),
                 }),
             ),
         );
@@ -146,10 +166,10 @@ describe("batch flush", () => {
         expect(idsInTx, `flushes seen: ${grouping}`)
             .toEqual(new Set(wantedIds.map((id) => id.toString())));
 
-        // Each deposit contributes exactly one cm.
+        // Each deposit contributes two leaves, inserted as one run.
         const rootLogs = parseContractLogs(receipt, masp, "RootAdvanced");
         expect(rootLogs.length, "one root advance per flush tx").toBe(1);
-        expect(rootLogs[0].args.inserted).toBe(BigInt(N));
+        expect(rootLogs[0].args.inserted).toBe(BigInt(N * 2));
 
         for (const s of submitted) {
             await waitForCm(h.fmd, s.cm);

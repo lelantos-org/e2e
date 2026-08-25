@@ -9,6 +9,9 @@ import {
     ASSETS,
     awaitOwn,
     baseAmt,
+    depositFeePaid,
+    feePaid,
+    scaleFor,
     feeFor,
     type Erc20Helpers,
     type Harness,
@@ -19,7 +22,6 @@ import {
 } from "../src/harness.js";
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
-const { alice: ALICE_NSK } = TEST_NSK.multiAsset;
 const { WETH: ASSET_WETH, MDAI: ASSET_MDAI } = ASSETS;
 const DEPOSIT_WETH = amt(10n);
 const DEPOSIT_MDAI = amt(20n);
@@ -67,14 +69,17 @@ describe("multi-asset deposit + withdraw", () => {
             const before = await snapshotBalances(token());
             const r = await alice.deposit({ amount: deposit, asset });
             await awaitOwn(alice, r);
-            return { before, after: await snapshotBalances(token()) };
+            // Read from the deposit's own event: the payer was debited for
+            // this on top of principal and the pool's shield fee.
+            const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+            return { before, relayerFee, after: await snapshotBalances(token()) };
         });
         const withdrawn = once(async () => {
             await deposited();
             const before = await snapshotBalances(token());
             const r = await alice.withdraw({ to: env.recipientAddress, amount: withdraw, asset });
             await awaitOwn(alice, r);
-            return { before, after: await snapshotBalances(token()) };
+            return { before, fee: feePaid(r), after: await snapshotBalances(token()) };
         });
         return { deposited, withdrawn };
     }
@@ -83,33 +88,37 @@ describe("multi-asset deposit + withdraw", () => {
     const mdaiLegs = roundTrip(() => mdai, ASSET_MDAI, DEPOSIT_MDAI, WITHDRAW_MDAI);
 
     it("deposit 10 WETH", async () => {
-        const { before, after } = await wethLegs.deposited();
-        const moved = baseAmt(DEPOSIT_WETH, ASSET_WETH) + SHIELD_FEE_WETH;
+        const { before, relayerFee, after } = await wethLegs.deposited();
+        const moved =
+            baseAmt(DEPOSIT_WETH, ASSET_WETH) + SHIELD_FEE_WETH + relayerFee * scaleFor(ASSET_WETH);
         expect(after.payer - before.payer).toBe(-moved);
         expect(after.masp - before.masp).toBe(moved);
         expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
     }, TEST_TIMEOUT.SPEND);
 
     it("deposit 20 mDAI", async () => {
-        const { before, after } = await mdaiLegs.deposited();
-        const moved = baseAmt(DEPOSIT_MDAI, ASSET_MDAI) + SHIELD_FEE_MDAI;
+        const { before, relayerFee, after } = await mdaiLegs.deposited();
+        const moved =
+            baseAmt(DEPOSIT_MDAI, ASSET_MDAI) + SHIELD_FEE_MDAI + relayerFee * scaleFor(ASSET_MDAI);
         expect(after.payer - before.payer).toBe(-moved);
         expect(after.masp - before.masp).toBe(moved);
         expect(alice.balance(ASSET_MDAI)).toBe(DEPOSIT_MDAI);
     }, TEST_TIMEOUT.SPEND);
 
     it("withdraw 5 WETH (recipient receives net of unshield fee)", async () => {
-        const { before, after } = await wethLegs.withdrawn();
+        const { before, fee, after } = await wethLegs.withdrawn();
         expect(after.recipient - before.recipient).toBe(NET_WITHDRAW_WETH);
         expect(before.masp - after.masp).toBe(NET_WITHDRAW_WETH);
-        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH);
+        // The relayer's fee stays inside the pool as a note, so it never shows
+        // in the public deltas above — only in what alice has left.
+        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
     }, TEST_TIMEOUT.SPEND);
 
     it("withdraw 10 mDAI (recipient receives net of unshield fee)", async () => {
-        const { before, after } = await mdaiLegs.withdrawn();
+        const { before, fee, after } = await mdaiLegs.withdrawn();
         expect(after.recipient - before.recipient).toBe(NET_WITHDRAW_MDAI);
         expect(before.masp - after.masp).toBe(NET_WITHDRAW_MDAI);
-        expect(alice.balance(ASSET_MDAI)).toBe(DEPOSIT_MDAI - WITHDRAW_MDAI);
+        expect(alice.balance(ASSET_MDAI)).toBe(DEPOSIT_MDAI - WITHDRAW_MDAI - fee);
     }, TEST_TIMEOUT.SPEND);
 
     it("MASP accrues correct shield + unshield fees per asset", async () => {

@@ -2,16 +2,16 @@ import {
     type EthSigner,
     InMemoryNoteStore,
     nodeWallet,
-    TRANSACT_3X3,
+    TRANSACT_4X4,
     ViemChainAdapter,
     type Wallet,
 } from "@lelantos-org/sdk";
 import type { Field } from "@lelantos-org/sdk/crypto";
 
 import { RELAYER } from "./accounts.js";
-import { TREE_DEPTH } from "./constants.js";
+import { TREE_DEPTH } from "./protocol/shape.js";
 import { env } from "./env.js";
-import { PROVER_PATHS } from "./harness.js";
+import { PROVER_PATHS } from "./testkit/prover.js";
 import { payerEthSigner } from "./signers.js";
 import { log } from "./utils.js";
 
@@ -84,7 +84,7 @@ export async function createTestWallet(
         config: {
             chainId: env.chainId,
             treeDepth: TREE_DEPTH,
-            shape: TRANSACT_3X3,
+            shape: TRANSACT_4X4,
             relayerAddress: RELAYER.address,
             chain,
             fmdUrl: env.fmdUrl,

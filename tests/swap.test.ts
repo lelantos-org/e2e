@@ -13,6 +13,7 @@ import {
     DEAD_ADDRESS,
     type Erc20Helpers,
     expectRevert,
+    FEE_HEADROOM,
     feeFor,
     type Harness,
     MOCK_ERC20_ABI,
@@ -90,7 +91,9 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
 
     /// A note big enough for one swap.
     const fundOneSwap = () =>
-        alice.deposit({ amount: amt(SWAP_PUBLIC_OUT), asset: ASSET })
+        // Plus headroom: the withdraw leg of the swap also funds a note
+        // paying the relayer, on top of the pool's unshield fee.
+        alice.deposit({ amount: amt(SWAP_PUBLIC_OUT + FEE_HEADROOM), asset: ASSET })
             .then((r) => awaitOwn(alice, r));
 
     /// The quoter is seeded with a fixed `amountOut` for the pair, so the quote

@@ -10,10 +10,14 @@ import {
 } from "testcontainers";
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts.js";
-import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, FEE_BPS, logDir } from "./constants.js";
+import { type Addresses, requireToken, type StackEnv, type SwapAddresses, type Urls } from "./infra/addresses.js";
+import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, logDir } from "./infra/docker.js";
+import { FEE_BPS } from "./protocol/amounts.js";
+import { FEE_TOKENS } from "./protocol/assets.js";
+import type { FeeTokenSpec } from "./infra/relayer-config.js";
 import { log } from "./utils.js";
 import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2.js";
-import { ANVIL, backendSpecs, POSTGRES, runService, type ServiceSpec } from "./services.js";
+import { ANVIL, backendSpecs, ORACLE, POSTGRES, runService, type ServiceSpec } from "./services.js";
 
 /** A started container plus the service alias its logs should be filed under. */
 interface RunningService {
@@ -23,43 +27,7 @@ interface RunningService {
 
 const execFileAsync = promisify(execFile);
 
-export interface Addresses {
-    verifier: string;
-    treeUpdateVerifier: string;
-    masp: string;
-    tokens: Record<number, string>;
-    wrappedNative?: string;
-    nativeAdapter?: string;
-    permit2: string;
-    swap?: SwapAddresses;
-}
-
-export interface SwapAddresses {
-    univ3Quoter: string;
-    univ3Adapter: string;
-    mockSwapRouter: string;
-    wrapper: string;
-}
-
-export interface Urls {
-    rpc: string;
-    relayer: string;
-    fmd: string;
-    explorer: string;
-    metaquoter?: string;
-}
-
-export interface StackEnv extends Urls {
-    chainId: string;
-    masp: string;
-    tokens: Record<number, string>;
-    payerAddress: string;
-    payerKey: string;
-    recipientAddress: string;
-    permit2: string;
-    nativeAdapter?: string;
-    swap?: SwapAddresses;
-}
+export type { Addresses, StackEnv, SwapAddresses, Urls } from "./infra/addresses.js";
 
 export class Stack {
     private network?: StartedNetwork;
@@ -117,13 +85,31 @@ export class Stack {
     async upBackend(addrs: Addresses): Promise<Urls> {
         const network = this.network;
         if (!network) throw new Error("upBackend: call up() first");
-        const specs = backendSpecs(addrs.masp, addrs.swap, addrs.nativeAdapter);
+        // Every registered asset is payable, so a test can pay the fee in
+        // whatever it is already moving — the wallet builds one spend in one
+        // asset and cannot pay in another.
+        // `id` is the join to the deploy and is not part of the relayer's
+        // config, so it is destructured away rather than passed and ignored.
+        const feeTokens: FeeTokenSpec[] = FEE_TOKENS.map(({ id, ...token }) => ({
+            ...token,
+            address: requireToken(addrs.tokens, id),
+        }));
+        const specs = backendSpecs({
+            masp: addrs.masp,
+            feeTokens,
+            swap: addrs.swap,
+            nativeAdapter: addrs.nativeAdapter,
+        });
 
         const start = async (spec: ServiceSpec): Promise<StartedTestContainer> => {
             const container = await runService(spec, network);
             this.backends.push({ alias: spec.alias, container });
             return container;
         };
+
+        // Before the relayer: it resolves every fee token's oracle pair at
+        // boot and refuses to start if one is unreachable.
+        await start(ORACLE);
 
         await start(specs.ingester);
 

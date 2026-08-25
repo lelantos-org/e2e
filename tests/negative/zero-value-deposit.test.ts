@@ -11,8 +11,6 @@ import {
 } from "../../src/harness.js";
 import { setupFile, type SdkWallet } from "../../src/fixture.js";
 
-const { alice: NSK } = TEST_NSK.negZeroValue;
-
 describe("negative: zero-value deposit", () => {
     let alice: SdkWallet;
 

@@ -6,6 +6,7 @@ import {
     awaitOwn,
     createTestWallet,
     expectRevert,
+    feePaid,
     REVERT,
     SYNC_LIMIT,
     TEST_NSK,
@@ -16,6 +17,10 @@ import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.doubleSpend;
 const DEPOSIT_AMT = amt(50n);
+// Less than the deposit: the spend also has to fund the relayer's fee note,
+// so a wallet can never send its entire balance. The exact amount is
+// incidental — this file is about spending one note twice.
+const SEND_AMT = amt(40n);
 
 describe("double-spend rejection", () => {
     let alice: SdkWallet;
@@ -41,8 +46,9 @@ describe("double-spend rejection", () => {
 
     const spent = once(async () => {
         await funded();
-        const r = await alice.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET });
+        const r = await alice.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET });
         await awaitOwn(alice, r);
+        return { fee: feePaid(r) };
     });
 
     it("deposit funds alice's spendable note", async () => {
@@ -52,8 +58,10 @@ describe("double-spend rejection", () => {
     }, TEST_TIMEOUT.SPEND);
 
     it("first transfer spends alice's note (succeeds)", async () => {
-        await spent();
-        expect(alice.balance(ASSET)).toBe(0n);
+        const { fee } = await spent();
+        // Not zero: the note is consumed, but the change comes back minus
+        // what the relayer was paid to relay it.
+        expect(alice.balance(ASSET)).toBe(DEPOSIT_AMT - SEND_AMT - fee);
         // bob's local store is empty until awaitCommitments fires.
         expect(bob.balance(ASSET)).toBe(0n);
     }, TEST_TIMEOUT.SPEND);
@@ -66,7 +74,7 @@ describe("double-spend rejection", () => {
         // practice the relayer catches it before the pool does — see
         // `REVERT.NULLIFIER_SPENT` for why both layers are accepted.
         await expectRevert(
-            stale.transfer({ to: bob.address, amount: DEPOSIT_AMT, asset: ASSET }),
+            stale.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET }),
             REVERT.NULLIFIER_SPENT,
         );
         // The note is still Alice's, unspent value never moved to bob twice.

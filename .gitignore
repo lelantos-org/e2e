@@ -3,3 +3,6 @@ runner/dist/
 runner/coverage/
 circuits/
 *.log
+
+# Configs rendered at stack boot (see src/infra/relayer-config.ts).
+.rendered/

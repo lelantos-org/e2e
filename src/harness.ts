@@ -1,5 +1,3 @@
-import { createRequire } from "node:module";
-
 import { ethers } from "ethers";
 
 import { Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
@@ -9,18 +7,20 @@ import { type AuxOutput, computePiHash, type DepositRequest } from "@lelantos-or
 import { RelayerClient } from "@lelantos-org/sdk/relayer";
 
 import { RELAYER } from "./accounts.js";
-import { ASSET, MASP_ABI, MASP_DEPOSIT_ABI, TIMEOUT, TREE_DEPTH } from "./constants.js";
+import { MASP_ABI, MASP_DEPOSIT_ABI } from "./protocol/abi.js";
+import { ASSET, scaleFor } from "./protocol/assets.js";
+export { parseContractLogs } from "./protocol/logs.js";
+import { parseContractLogs } from "./protocol/logs.js";
+import { FEE_HEADROOM } from "./protocol/amounts.js";
+import { TREE_DEPTH } from "./protocol/shape.js";
+import { PROVER_PATHS } from "./testkit/prover.js";
+import { TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
-import { type Erc20Helpers, ExplorerClient, setupErc20, setupWeth } from "./scenario.js";
+import { ExplorerClient } from "./explorer-client.js";
+import { type Erc20Helpers, setupErc20, setupWeth } from "./scenario.js";
 import { payerEthSigner } from "./signers.js";
 import { rpcProvider, SerialWallet, settleNonce } from "./tx.js";
 import { counter, pollUntil } from "./utils.js";
-
-const resolve = createRequire(import.meta.url).resolve;
-export const PROVER_PATHS = {
-    wasmPath: resolve("@lelantos-org/circuits/3x3/3x3.wasm"),
-    zkeyPath: resolve("@lelantos-org/circuits/3x3/3x3_final.zkey"),
-};
 
 // Test files should pass a file-unique seed; cross-file collisions produce
 // identical FMD clues + ECDH ephemerals on the shared anvil.
@@ -68,15 +68,31 @@ export function tokenAddressFor(asset: bigint): { address: string; kind: "erc20"
     }
 }
 
+/**
+ * Mint (or wrap) `baseUnits` of `asset` for the payer, plus slack for fees.
+ *
+ * The slack is not optional accounting. Every deposit now pulls a third
+ * amount on top of principal and the pool's protocol fee — the note paying
+ * whoever flushes it — and callers size `baseUnits` with `withFee`, which
+ * covers only the first two. Funding exactly `withFee` leaves the Permit2
+ * pull short and reverts inside the token with `TRANSFER_FROM_FAILED`, which
+ * names neither the fee nor the deposit.
+ *
+ * Added here rather than at each call site because this is the one place that
+ * decides what the payer needs, and because the charge moves with gas — a
+ * caller computing it would be pinning a number that is only right until the
+ * next block.
+ */
 export async function fundPayerForAsset(
     h: Harness,
     asset: bigint,
     baseUnits: bigint,
 ): Promise<Erc20Helpers> {
     const { address, kind } = tokenAddressFor(asset);
+    const funded = baseUnits + FEE_HEADROOM * scaleFor(asset);
     return kind === "weth"
-        ? setupWeth(h.payer, address, env.permit2Address, baseUnits)
-        : setupErc20(h.payer, address, env.permit2Address, baseUnits);
+        ? setupWeth(h.payer, address, env.permit2Address, funded)
+        : setupErc20(h.payer, address, env.permit2Address, funded);
 }
 
 export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
@@ -175,12 +191,16 @@ export async function submitDepositDirect(args: {
     payer: ethers.Signer;
     deposit: DepositRequest;
     aux: AuxOutput;
+    /** Payload for the deposit's fee leaf; `buildDeposit` returns it. */
+    feeAux: AuxOutput;
     tokenAddr: string;
     maxTotal: bigint;
     deadline?: bigint;
 }): Promise<SubmitDepositResult> {
-    const { payer, deposit, aux, tokenAddr, maxTotal } = args;
-    const piHash = computePiHash(deposit, aux);
+    const { payer, deposit, aux, feeAux, tokenAddr, maxTotal } = args;
+    // Both leaves are inside the Permit2 witness, so a relayer cannot swap the
+    // fee note and reuse the payer's signature.
+    const piHash = computePiHash(deposit, aux, feeAux);
     const nonce = nextPermit2Nonce();
     const deadline = args.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 3600);
     // `signPermit2Witness` takes a viem-shaped `EthSigner`. Use the shared
@@ -208,33 +228,26 @@ export async function submitDepositDirect(args: {
             deposit.outCm,
             deposit.cvDep,
             deposit.rcv,
+            deposit.feeIn,
+            deposit.feeCm,
+            deposit.feeCvDep,
+            deposit.feeRcv,
         ],
         [sig.nonce, sig.deadline, sig.maxTotal, sig.signature],
         [aux.clueRx, aux.clueRy, aux.ephPubX, aux.ephPubY, ethers.hexlify(aux.ciphertext)],
+        [
+            feeAux.clueRx,
+            feeAux.clueRy,
+            feeAux.ephPubX,
+            feeAux.ephPubY,
+            ethers.hexlify(feeAux.ciphertext),
+        ],
     );
     const receipt = await tx.wait();
     const depositId = extractDepositId(receipt, masp);
     return { txHash: tx.hash, depositId };
 }
 
-// Skips logs from foreign ABIs (ethers parseLog throws on those).
-export function parseContractLogs(
-    receipt: ethers.TransactionReceipt | ethers.ContractTransactionReceipt | null,
-    contract: ethers.Contract,
-    eventName: string,
-): ethers.LogDescription[] {
-    if (!receipt) return [];
-    const out: ethers.LogDescription[] = [];
-    for (const log of receipt.logs) {
-        try {
-            const parsed = contract.interface.parseLog(log);
-            if (parsed?.name === eventName) out.push(parsed);
-        } catch {
-            // wrong contract
-        }
-    }
-    return out;
-}
 
 function extractDepositId(
     receipt: ethers.TransactionReceipt | ethers.ContractTransactionReceipt | null,
@@ -302,13 +315,26 @@ export {
 
 // Local re-exports. Tests should be able to get everything they need from
 // this module plus `./fixture.js`, so anything a test reaches for belongs here.
+export { MASP_ABI, MASP_DEPOSIT_ABI, MOCK_ERC20_ABI, SWAP_WRAPPER_ABI } from "./protocol/abi.js";
 export {
-    amt, ASSET, ASSETS, baseAmt, circuitFee, DEAD_ADDRESS, FEE_BPS, feeFor, LIST_LIMIT,
-    MASP_ABI, MASP_DEPOSIT_ABI, MOCK_ERC20_ABI, N_IN, N_OUT, POLL, type PollOpts, REVERT,
-    scaleFor, SWAP_WRAPPER_ABI, SYNC_LIMIT, TEST_TIMEOUT, TIMEOUT, withFee,
-} from "./constants.js";
+    amt,
+    baseAmt,
+    circuitFee,
+    depositTotal,
+    FEE_BPS,
+    FEE_HEADROOM,
+    feeFor,
+    withFee,
+} from "./protocol/amounts.js";
+export { ASSET, ASSETS, scaleFor } from "./protocol/assets.js";
+export { REVERT } from "./protocol/reverts.js";
+export { N_IN, N_OUT } from "./protocol/shape.js";
+export { DEAD_ADDRESS } from "./chain/well-known.js";
+export { PROVER_PATHS } from "./testkit/prover.js";
+export { LIST_LIMIT, POLL, type PollOpts, SYNC_LIMIT, TEST_TIMEOUT, TIMEOUT } from "./testkit/timeouts.js";
+export { ExplorerClient } from "./explorer-client.js";
 export {
-    accruedFee, type Erc20Helpers, ExplorerClient, expectBalanceDeltas,
+    accruedFee, type Erc20Helpers, expectBalanceDeltas,
     makeWallet, noteFor, padOutputs, recipientCommitments, rngForOutput, setupErc20, setupWeth,
     snapshotBalances, type CircuitWallet, trackedAddrs, waitForAdvance, waitForCm,
 } from "./scenario.js";
@@ -316,6 +342,17 @@ export {
 // module, and routing it back through the barrel would make the cycle load-
 // order sensitive. Tests import it directly from `../src/fixture.js`.
 export { payerEthSigner } from "./signers.js";
-export { cmToHex, counter, errorText, expectRevert, nfToHex, pollUntil } from "./utils.js";
+export { errorText } from "./protocol/reverts.js";
+export { expectRevert } from "./testkit/expect-revert.js";
+export { feePaid } from "./testkit/spend-fee.js";
+export {
+    type DepositFeeArg,
+    type FeeRng,
+    depositFeePaid,
+    quoteDepositFee,
+    relayerFeeNote,
+    unflushableFee,
+} from "./testkit/deposit-fee.js";
+export { cmToHex, counter, pollUntil } from "./utils.js";
 export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";
 export { createTestWallet, TEST_NSK } from "./wallet.js";

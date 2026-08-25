@@ -13,6 +13,7 @@ import {
     newAuxRng,
     REVERT,
     rngForOutput,
+    unflushableFee,
     submitDepositDirect,
     TEST_NSK,
     TEST_TIMEOUT,
@@ -42,12 +43,14 @@ describe("negative: expired Permit2 deadline", () => {
                 rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(),
                 aux: rngForOutput(aux),
             },
+            fee: unflushableFee(alice.recipient, { rng, auxRng: aux }),
         });
         await expectRevert(
             submitDepositDirect({
                 payer: h.payer,
                 deposit: built.deposit,
                 aux: built.aux,
+                feeAux: built.feeAux,
                 tokenAddr: env.token2,
                 // Correctly sized, so the only thing wrong is the deadline.
                 maxTotal: withFee(50n),

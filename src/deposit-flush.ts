@@ -9,7 +9,7 @@
 
 import { DepositStream, type FlushWait } from "@lelantos-org/sdk/relayer";
 
-import { TIMEOUT } from "./constants.js";
+import { TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
 import { nodeEventSource } from "./sse.js";
 

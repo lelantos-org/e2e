@@ -4,6 +4,7 @@ import {
     amt,
     ASSET,
     awaitOwn,
+    feePaid,
     awaitRecipient,
     createTestWallet,
     SYNC_LIMIT,
@@ -53,15 +54,19 @@ describe("cold-client resync", () => {
         await awaitRecipient(bob, t2);
         const afterT2 = alice.balance(ASSET);
 
-        return { afterD1, afterT1, afterD2, afterT2 };
+        // Each transfer also funds a note paying the relayer, out of alice's
+        // own inputs — so her running balance drops by more than she sent.
+        return { afterD1, afterT1, afterD2, afterT2, fee1: feePaid(t1), fee2: feePaid(t2) };
     });
 
     it("activity sequence: 2 deposits + 2 transfers to bob", async () => {
-        const { afterD1, afterT1, afterD2, afterT2 } = await activity();
+        const { afterD1, afterT1, afterD2, afterT2, fee1, fee2 } = await activity();
         expect(afterD1, "after deposit 1").toBe(DEPOSIT_1);
-        expect(afterT1, "after transfer 1").toBe(DEPOSIT_1 - TO_BOB_1);
-        expect(afterD2, "after deposit 2").toBe(DEPOSIT_1 - TO_BOB_1 + DEPOSIT_2);
-        expect(afterT2, "after transfer 2").toBe(DEPOSIT_1 + DEPOSIT_2 - TO_BOB_1 - TO_BOB_2);
+        expect(afterT1, "after transfer 1").toBe(DEPOSIT_1 - TO_BOB_1 - fee1);
+        expect(afterD2, "after deposit 2").toBe(DEPOSIT_1 - TO_BOB_1 - fee1 + DEPOSIT_2);
+        expect(afterT2, "after transfer 2").toBe(
+            DEPOSIT_1 + DEPOSIT_2 - TO_BOB_1 - TO_BOB_2 - fee1 - fee2,
+        );
         // The warm counterparty saw both incoming notes as they landed.
         expect(bob.balance(ASSET), "bob, synced live").toBe(EXPECTED_BOB_TOTAL);
     }, TEST_TIMEOUT.SEQUENCE);

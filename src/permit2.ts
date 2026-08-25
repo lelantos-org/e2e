@@ -1,13 +1,12 @@
-// Refresh bytecode by extracting from a forge run:
-//   forge script script/DeployTest.s.sol:DeployTest --rpc-url <anvil> \
-//     --private-key 0x... --broadcast -vvvv \
-//     | grep -oE "VM::etch\(0x000...022D473030F116dDEE9F6B43aC78BA3, 0x[0-9a-f]+\)"
-export const CANONICAL_PERMIT2_ADDRESS =
-    "0x000000000022D473030F116dDEE9F6B43aC78BA3";
-
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { CANONICAL_PERMIT2_ADDRESS } from "./chain/well-known.js";
+
+// Re-exported so `stack.ts` keeps getting the address from the module that
+// also pre-deploys the code at it.
+export { CANONICAL_PERMIT2_ADDRESS };
 
 let cached: string | undefined;
 

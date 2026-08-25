@@ -13,9 +13,9 @@ import { ethers } from "ethers";
 import type { EvmAddress } from "@lelantos-org/sdk";
 import { fetchSwapQuote, type SwapQuote, type SwapQuoteRequest } from "@lelantos-org/sdk/quoter";
 
-import { MOCK_QUOTER_V2_ABI, MOCK_SWAP_ROUTER_ABI } from "./constants.js";
+import { MOCK_QUOTER_V2_ABI, MOCK_SWAP_ROUTER_ABI } from "./protocol/abi.js";
 import { env } from "./env.js";
-import { PROVER_PATHS } from "./harness.js";
+import { PROVER_PATHS } from "./testkit/prover.js";
 
 export interface SwapHarness {
     metaquoterUrl: string;

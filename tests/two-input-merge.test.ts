@@ -4,6 +4,7 @@ import {
     amt,
     ASSET,
     awaitOwn,
+    feePaid,
     awaitRecipient,
     type Harness,
     N_OUT,
@@ -16,6 +17,13 @@ import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 const DEPOSIT_A = amt(30n);
 const DEPOSIT_B = amt(70n);
 const TOTAL = amt(DEPOSIT_A + DEPOSIT_B);
+/**
+ * More than either note alone, so the selector has to consume both — which is
+ * the whole point of this file — but below `TOTAL` by more than the relayer's
+ * fee, because a spend must also fund the fee note and can never send the
+ * wallet's entire balance.
+ */
+const SEND_AMT = amt(DEPOSIT_B + 25n);
 
 describe("two-input merge transfer", () => {
     let h: Harness;
@@ -42,19 +50,18 @@ describe("two-input merge transfer", () => {
         expect(alice.notes({ asset: ASSET, spent: false }).length).toBe(2);
     }, TEST_TIMEOUT.SWAP);
 
-    it("transfer consumes BOTH inputs, lands a single 100-note for bob", async () => {
+    it("transfer consumes BOTH inputs, lands a single note for bob", async () => {
         await funded();
         // Deltas, not absolutes: the MASP is shared across all test files.
         const before = (await h.masp.committedCount()) as bigint;
         const inputNotesBefore = alice.notes({ asset: ASSET, spent: false });
         expect(inputNotesBefore.length).toBe(2);
 
-        const r = await alice.transfer({ to: bob.address, amount: TOTAL, asset: ASSET });
-        // Alice sends her entire balance, so there is no change note and
-        // nothing of hers to wait for — assert that rather than branching on
-        // it, so a selector change that starts producing change is a visible
-        // failure instead of a silently skipped wait.
-        expect(r.ownCommitments, "full-balance spend leaves no change note").toHaveLength(0);
+        const r = await alice.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET });
+        const fee = feePaid(r);
+        // Both inputs are consumed and alice keeps the remainder, so there is
+        // change to wait for on her side as well as bob's.
+        await awaitOwn(alice, r);
         await awaitRecipient(bob, r);
 
         for (const n of inputNotesBefore) {
@@ -64,7 +71,7 @@ describe("two-input merge transfer", () => {
             ).toBeDefined();
         }
         expect((await h.masp.committedCount()) as bigint).toBe(before + BigInt(N_OUT));
-        expect(alice.balance(ASSET)).toBe(0n);
-        expect(bob.balance(ASSET)).toBe(TOTAL);
+        expect(alice.balance(ASSET)).toBe(TOTAL - SEND_AMT - fee);
+        expect(bob.balance(ASSET)).toBe(SEND_AMT);
     }, TEST_TIMEOUT.SPEND);
 });

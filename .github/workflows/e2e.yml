@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 75
 
     env:
-      CIRCUITS_RELEASE: v0.10.0
+      CIRCUITS_RELEASE: v0.11.2
 
     steps:
       - name: Free disk space

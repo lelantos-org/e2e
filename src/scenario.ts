@@ -9,17 +9,13 @@ import { FmdClient, type FmdNoteOut } from "@lelantos-org/sdk/fmd-server";
 import { buildSpendingKey, detectionKeyFor, type SpendingKey } from "@lelantos-org/sdk/keys";
 import type { Note } from "@lelantos-org/sdk/notes";
 
-import {
-    ASSET, FMD_GAMMA, LIST_LIMIT, MASP_ABI, MOCK_ERC20_ABI, MOCK_WETH9_ABI, N_OUT, TIMEOUT,
-} from "./constants.js";
+import { MASP_ABI, MOCK_ERC20_ABI, MOCK_WETH9_ABI } from "./protocol/abi.js";
+import { ASSET } from "./protocol/assets.js";
+import { FMD_GAMMA, N_OUT } from "./protocol/shape.js";
+import { LIST_LIMIT, TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
 import { ExplorerClient, type TreeAdvance } from "./explorer-client.js";
 import { cmToHex, pollUntil } from "./utils.js";
-
-export type { TreeAdvance } from "./explorer-client.js";
-export { ExplorerClient } from "./explorer-client.js";
-export { ASSET, FEE_BPS, FMD_GAMMA, MASP_ABI, MOCK_ERC20_ABI, TREE_DEPTH, feeFor, withFee } from "./constants.js";
-export { counter, cmToHex, nfToHex } from "./utils.js";
 
 export interface CircuitWallet {
     keys: SpendingKey;
@@ -185,15 +181,29 @@ export async function accruedFee(
     return (await _feeView.accruedFee(tokenAddr)) as bigint;
 }
 
-// Commitments the originator's wallet won't scan (zero-pad outputs in
-// deposit/withdraw, recipient's note in non-self transfer). Use for the
-// receiver-side `awaitCommitments` call in tests; sender-side waits should
-// pass `r.ownCommitments` directly.
+/**
+ * Commitments the *counterparty* is expected to scan.
+ *
+ * "Not the sender's" is not a usable definition. A fee-paying spend has a third
+ * kind of output — a note addressed to the relayer — which is non-zero and not
+ * the sender's, so a receiver-side wait built by elimination blocks forever on
+ * a note only the relayer can decrypt.
+ *
+ * Nor is there an index to read the payee off: the SDK shuffles output slots,
+ * because slot order is the last thing in the output vector that would say
+ * which commitment is the payee's and which is the relayer's. So the result
+ * carries `recipientCommitment` explicitly and this uses it, falling back to
+ * elimination only for the kinds that have no single payee.
+ *
+ * Sender-side waits should pass `r.ownCommitments` directly.
+ */
 export function recipientCommitments(r: {
     commitments: readonly string[];
     nonZeroCommitments?: readonly string[];
     ownCommitments?: readonly string[];
+    recipientCommitment?: string;
 }): string[] {
+    if (r.recipientCommitment !== undefined) return [r.recipientCommitment];
     const own = new Set(r.ownCommitments ?? []);
     const pool = r.nonZeroCommitments ?? r.commitments;
     return pool.filter((c) => !own.has(c));

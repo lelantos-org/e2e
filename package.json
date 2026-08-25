@@ -14,8 +14,8 @@
     "urls": "tsx src/orchestrate.ts urls"
   },
   "dependencies": {
-    "@lelantos-org/circuits": "^0.10.0",
-    "@lelantos-org/sdk": "^0.20.0",
+    "@lelantos-org/circuits": "^0.11.2",
+    "@lelantos-org/sdk": "^0.24.0",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",
