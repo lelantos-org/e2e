@@ -10,6 +10,11 @@ export const MASP_ABI = [
     "function feeBps() view returns (uint16)",
     "function treasury() view returns (address)",
     "function accruedFee(address) view returns (uint256)",
+    // Per-deposit escrow digest; nonzero exactly while the deposit is still
+    // pending, so a deposit no relayer will flush is observable from the chain.
+    "function escrowed(uint256 id) view returns (bytes32)",
+    // Blocks a deposit must age before `cancelDeposit` accepts it.
+    "function cancelDelay() view returns (uint32)",
     "event DepositFlushed(uint256 indexed id, bytes32 cm)",
     "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",
 ] as const;
@@ -41,6 +46,11 @@ export const MASP_DEPOSIT_ABI = [
     "error SignatureExpired(uint256 signatureDeadline)",
     "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm, uint256 cvDepX, uint256 cvDepY, uint256 rcv, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint64 feeIn, bytes32 feeCm, uint256 feeCvDepX, uint256 feeCvDepY, uint256 feeRcv, uint256 feeClueRx, uint256 feeClueRy, uint256 feeEphPubX, uint256 feeEphPubY, bytes feeCiphertext)",
     "event DepositFlushed(uint256 indexed id, bytes32 cm)",
+    // The payer's way out of a deposit no relayer will flush. Every argument is
+    // the digest preimage the pool dropped from storage at submit, so a caller
+    // resupplies it from the deposit's own `DepositEscrowed` event.
+    "function cancelDeposit(uint256 id, uint48 publicIn, bytes32 cm, uint256[2] cvDep, uint64 publicAssetId, uint16 fbps, address payer, uint32 submittedAt, (uint48 feeIn, bytes32 feeCm, uint256[2] feeCvDep) feeNote)",
+    "event DepositCanceled(uint256 indexed id, address indexed payer, uint256 amount)",
 ] as const;
 
 export const MOCK_QUOTER_V2_ABI = [

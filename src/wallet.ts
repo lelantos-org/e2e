@@ -34,6 +34,7 @@ export const TEST_NSK = {
     swap:           { alice: 0x55_a1ce_a11c0n },
     negExpired:     { alice: 0xe1_a1ce_a11c0n },
     negZeroValue:   { alice: 0xe2_a1ce_a11c0n },
+    negDepositFee:  { alice: 0xe3_a1ce_a11c0n },
     edgeConcurrent: { alice: 0xed_a1ce_a11c0n, bob: 0xed_b0b_b0b00n },
 } as const;
 
