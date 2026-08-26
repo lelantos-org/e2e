@@ -1,84 +1,38 @@
+// Circuit-level wallet material, ERC-20 setup, and the balance/commitment
+// helpers the assertions in `tests/` are written against.
+
 import { expect } from "vitest";
 
 import { ethers } from "ethers";
 
 import type { OutputRecipient } from "@lelantos-org/sdk/bundle";
 import type { Field, Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
-import { type FmdDetectionKey, type FmdFlagKey, fmdFlagKeyFromDetection } from "@lelantos-org/sdk/fmd";
 import { FmdClient, type FmdNoteOut } from "@lelantos-org/sdk/fmd-server";
-import { buildSpendingKey, detectionKeyFor, type SpendingKey } from "@lelantos-org/sdk/keys";
-import type { Note } from "@lelantos-org/sdk/notes";
+import { buildSpendingKey, type SpendingKey } from "@lelantos-org/sdk/keys";
 
 import { MASP_ABI, MOCK_ERC20_ABI, MOCK_WETH9_ABI } from "./protocol/abi.js";
-import { ASSET } from "./protocol/assets.js";
-import { FMD_GAMMA, N_OUT } from "./protocol/shape.js";
 import { LIST_LIMIT, TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
-import { ExplorerClient, type TreeAdvance } from "./explorer-client.js";
 import { cmToHex, pollUntil } from "./utils.js";
 
+/** The raw key bundle the direct `buildDeposit` path takes. */
 export interface CircuitWallet {
     keys: SpendingKey;
     recipient: OutputRecipient;
-    detectionKey: FmdDetectionKey;
-    flagKey: FmdFlagKey;
 }
 
 export function makeWallet(P: Poseidon, J: Jubjub, nsk: Field): CircuitWallet {
     const keys = buildSpendingKey(P, J, nsk);
-    // `SpendingKey` structurally satisfies `ViewingKey` (ivk / pk_d / dk / ck),
-    // which is what `detectionKeyFor` wants.
-    const detection = detectionKeyFor(J, P, keys, FMD_GAMMA);
     return {
         keys,
-        // An `OutputRecipient` carries the *public* clue key `ck`, never the
-        // root detection secret `dk` — expanding `ck` yields flag-key points
-        // and nothing else.
+        // An `OutputRecipient` carries the public clue key `ck`, never the root
+        // detection secret `dk`; expanding `ck` yields flag-key points only.
         recipient: { pk_d: keys.pk_d, pk: keys.pk, ck: keys.ck },
-        detectionKey: detection,
-        flagKey: fmdFlagKeyFromDetection(J, detection),
-    };
-}
-
-export function noteFor(
-    w: CircuitWallet,
-    value: bigint,
-    rng: () => Field,
-    asset: bigint = ASSET,
-): Note {
-    return {
-        asset,
-        value,
-        pk: w.keys.pk,
-        rho: rng(),
-        rcm: rng(),
-        rcv: rng(),
-        rcvDep: rng(),
     };
 }
 
 export function rngForOutput(rng: () => Field): { esk: Field; fmdR: Field } {
     return { esk: rng(), fmdR: rng() };
-}
-
-/**
- * Pad a spend's outputs up to the circuit's `nOut` with zero-value notes back
- * to `self`. `buildSpend` takes exactly `nOut` outputs and enforces the balance
- * equation, so the pads must carry value 0 and their own fresh randomness.
- */
-export function padOutputs(
-    self: CircuitWallet,
-    outputs: readonly Note[],
-    rng: () => Field,
-    asset: bigint = ASSET,
-    nOut: number = N_OUT,
-): Note[] {
-    if (outputs.length > nOut) {
-        throw new Error(`padOutputs: ${outputs.length} outputs exceeds nOut=${nOut}`);
-    }
-    const out = [...outputs];
-    while (out.length < nOut) out.push(noteFor(self, 0n, rng, asset));
-    return out;
 }
 
 export interface Erc20Helpers {
@@ -121,7 +75,7 @@ export async function setupWeth(
     return erc20Helpers(c);
 }
 
-// Ask for `LIST_LIMIT` (the server's max) so a freshly indexed cm is not
+// Asks for `LIST_LIMIT`, the server's maximum, so a freshly indexed cm is not
 // buried behind older pages.
 export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> {
     const cmHex = cmToHex(cm);
@@ -131,20 +85,10 @@ export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> 
     }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
 }
 
-export async function waitForAdvance(
-    startIndex: number,
-    client: ExplorerClient = new ExplorerClient(env.explorerUrl, env.chainId),
-): Promise<TreeAdvance> {
-    return pollUntil(async () => {
-        const rows = await client.treeAdvances({ limit: 20 }).catch(() => null);
-        return rows?.find((t) => t.startIndex === startIndex);
-    }, { label: `tree_advance(${startIndex})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
-}
-
 /**
- * The three accounts every ERC-20 balance assertion in the suite tracks:
- * where the money comes from, where it is held while shielded, and where it
- * lands on the way out. Lazily read so `env` is not touched at import time.
+ * The three accounts every ERC-20 balance assertion in the suite tracks: where
+ * the funds come from, where they are held while shielded, and where they land
+ * on the way out. Read lazily so `env` is not touched at import time.
  */
 export const trackedAddrs = (): Record<string, string> => ({
     payer: env.payerAddress,
@@ -168,10 +112,10 @@ let _feeView: ethers.Contract | undefined;
 /**
  * Fees the pool has accrued for `tokenAddr`, in base units.
  *
- * Always assert this with `toBeGreaterThanOrEqual`: the counter is cumulative
- * across the whole run and every test file shares one MASP, so any file that
- * deposits or withdraws the same asset raises it. An exact assertion here
- * would encode the file ordering into the test.
+ * Assert with `toBeGreaterThanOrEqual`: the counter is cumulative across the
+ * run and every test file shares one MASP, so any file depositing or
+ * withdrawing the same asset raises it. An exact assertion would encode the
+ * file ordering into the test.
  */
 export async function accruedFee(
     provider: ethers.Provider,
@@ -182,18 +126,16 @@ export async function accruedFee(
 }
 
 /**
- * Commitments the *counterparty* is expected to scan.
+ * Commitments the counterparty is expected to scan.
  *
- * "Not the sender's" is not a usable definition. A fee-paying spend has a third
- * kind of output — a note addressed to the relayer — which is non-zero and not
- * the sender's, so a receiver-side wait built by elimination blocks forever on
- * a note only the relayer can decrypt.
+ * "Not the sender's" does not define them: a fee-paying spend has a third kind
+ * of output, the note addressed to the relayer, which is non-zero and not the
+ * sender's, so a receiver-side wait built by elimination blocks forever on a
+ * note only the relayer can decrypt.
  *
- * Nor is there an index to read the payee off: the SDK shuffles output slots,
- * because slot order is the last thing in the output vector that would say
- * which commitment is the payee's and which is the relayer's. So the result
- * carries `recipientCommitment` explicitly and this uses it, falling back to
- * elimination only for the kinds that have no single payee.
+ * Slot order does not identify the payee either, because the SDK shuffles
+ * output slots. The result therefore carries `recipientCommitment` explicitly,
+ * and elimination is the fallback only for kinds with no single payee.
  *
  * Sender-side waits should pass `r.ownCommitments` directly.
  */

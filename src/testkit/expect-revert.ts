@@ -1,11 +1,9 @@
-// `expectRevert` — assert that a promise rejects, and that it rejected for the
-// reason the test is actually about.
+// Assert that a promise rejects, and that it rejected for the reason the test
+// is about.
 //
-// Split from the plain assertions because it is the one that needs to know how
-// a revert is *shaped*: it matches against `errorText`, which flattens an
-// error's whole cause chain and decodes known selectors. A bare
-// `rejects.toThrow(/…/)` would match the message only, and most of these
-// reverts do not put their reason there.
+// Matching goes through `errorText`, which flattens an error's whole cause
+// chain and decodes known selectors. A bare `rejects.toThrow(/…/)` matches the
+// message only, and most of these reverts do not put their reason there.
 
 import { errorText } from "../protocol/reverts.js";
 
@@ -18,8 +16,8 @@ export interface ExpectRevertOpts {
 }
 
 // Ethers v6 surfaces revert data on message/reason/shortMessage/data depending
-// on tx vs call vs estimateGas; we check all of them, and walk `cause` so
-// chain reverts wrapped in SDK errors like TxMiningError still match.
+// on tx vs call vs estimateGas, so all of them are checked, and `cause` is
+// walked so chain reverts wrapped in SDK errors still match.
 export async function expectRevert(
     p: Promise<unknown>,
     spec?: RegExp | string | ErrorCtor | ExpectRevertOpts,

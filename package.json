@@ -6,16 +6,13 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "test:file": "vitest run",
     "typecheck": "tsc --noEmit",
     "up": "tsx src/orchestrate.ts up",
-    "down": "tsx src/orchestrate.ts down",
-    "deploy": "tsx src/orchestrate.ts deploy",
-    "urls": "tsx src/orchestrate.ts urls"
+    "deploy": "tsx src/orchestrate.ts deploy"
   },
   "dependencies": {
     "@lelantos-org/circuits": "^0.11.2",
-    "@lelantos-org/sdk": "^0.24.0",
+    "@lelantos-org/sdk": "^0.26.0",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",

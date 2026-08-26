@@ -1,6 +1,6 @@
-// Per-file test fixtures: what every `describe` needs before it can do
-// anything, and how a file expresses a multi-step story without leaking state
-// between sibling `it`s.
+// Per-file test fixtures: what every `describe` needs before it can run, and
+// how a file expresses a multi-step story without leaking state between
+// sibling `it`s.
 
 import type { AssetId, Wallet } from "@lelantos-org/sdk";
 import type { Field } from "@lelantos-org/sdk/crypto";
@@ -13,24 +13,24 @@ import { createTestWallet } from "./wallet.js";
  * The SDK wallet handle tests drive.
  *
  * Distinct from `scenario.ts`'s `CircuitWallet`, which is the raw key bundle
- * the direct `buildDeposit`/`buildSpend` paths take.
+ * the direct `buildDeposit` path takes.
  */
 export type SdkWallet = Wallet;
 
 /**
  * Memoise an async step.
  *
- * Test files often tell a story: deposit, then transfer the note, then try to
- * replay it. Writing that as three `it`s that hand state to each other through
- * module-level `let`s means no single `it` can be run with `-t`, and one
- * failure cascades into unrelated ones.
+ * Test files often tell a story: deposit, transfer the note, then replay it.
+ * Written as three `it`s handing state to each other through module-level
+ * `let`s, no single `it` can be run with `-t` and one failure cascades into
+ * unrelated ones.
  *
- * Instead, each step is a `once`-wrapped stage that later stages `await`. The
- * dependency becomes explicit, the work still happens exactly once per file,
- * and running one `it` alone pulls in precisely the prefix it needs.
+ * Each step is instead a `once`-wrapped stage that later stages await. The
+ * dependency is explicit, the work happens once per file, and running one `it`
+ * alone pulls in exactly the prefix it needs.
  *
- * A rejection is cached and re-thrown to every caller: a setup step that
- * failed must not be silently retried by the next `it` and half-succeed.
+ * A rejection is cached and re-thrown to every caller, so a failed setup step
+ * is not silently retried by the next `it` and half-succeed.
  */
 export function once<T>(fn: () => Promise<T>): () => Promise<T> {
     let p: Promise<T> | undefined;
@@ -38,8 +38,8 @@ export function once<T>(fn: () => Promise<T>): () => Promise<T> {
 }
 
 /**
- * Mint (or wrap) `amount` base units of `asset` to the payer and approve
- * Permit2. Use `withFee(...)` to size it — a deposit pulls principal + fee.
+ * Mint (or wrap) `amount` base units of `asset` for the payer and approve
+ * Permit2. Size it with `withFee(...)`: a deposit pulls principal + fee.
  */
 export interface FundSpec {
     asset: AssetId;
@@ -57,16 +57,13 @@ export interface FileFixture<K extends string> {
 /**
  * Boot the shared stack handle, fund the payer, and build this file's wallets.
  *
- * Replaces the six lines of `let h` / `let alice` / `beforeAll` that opened
- * every test file:
- *
  *     const { h, w, token } = await setupFile({
  *         nsks: TEST_NSK.fullFlow,
  *         fund: [{ asset: ASSET, amount: withFee(1000n) }],
  *     });
  *
  * `nsks` takes a `TEST_NSK` entry directly, so wallets come back under the
- * names the registry already uses (`w.alice`, `w.bob`).
+ * names the registry uses (`w.alice`, `w.bob`).
  */
 export async function setupFile<K extends string = never>(opts: {
     nsks?: Record<K, Field>;

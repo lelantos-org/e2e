@@ -36,25 +36,25 @@ import {
 const ASSET_OUT = ASSETS.MWBTC;
 const FEE_TIER = 500;
 
-/// What Alice asks to swap, and the two grossed-up figures that follow from it.
+/// What alice asks to swap, and the two grossed-up figures that follow.
 ///
 ///   `SWAP_PUBLIC_OUT` — the SDK sizes the withdraw leg to cover the amount
-///     *plus* its circuit-unit fee, so the pool sees publicOut = 105, not 100.
-///   `WRAPPER_AMOUNT_IN` — MASP.withdraw then skims `feeBps` off that before
-///     paying the wrapper, so the adapter is handed less again.
+///     plus its circuit-unit fee, so the pool sees publicOut = 105, not 100.
+///   `WRAPPER_AMOUNT_IN` — `MASP.withdraw` then skims `feeBps` off that before
+///     paying the wrapper, so the adapter receives less again.
 ///
-/// Both rules already appear in `full-flow`'s withdraw assertions; the swap
-/// path simply applies them one after the other.
+/// The swap path applies the same two rules as `full-flow`'s withdraw, in
+/// sequence.
 const SWAP_UNITS = 100n;
 const SWAP_PUBLIC_OUT = SWAP_UNITS + circuitFee(SWAP_UNITS);
 const WRAPPER_AMOUNT_IN = baseAmt(SWAP_PUBLIC_OUT) - feeFor(SWAP_PUBLIC_OUT);
 
-/// What the mock router is told to deliver, so the leg-2 escrow is
-/// deterministic and can be asserted exactly rather than as "> 0".
+/// What the mock router is told to deliver, making the leg-2 escrow
+/// deterministic and assertable exactly rather than as "> 0".
 const ROUTER_OUT = 100n;
 
-// The swap stack is deployed only when E2E_SKIP_SWAP is unset. Skip rather
-// than blow up in `beforeAll`: a partial stack should report "not exercised".
+// The swap stack is deployed only when E2E_SKIP_SWAP is unset. Skipping rather
+// than failing in `beforeAll` makes a partial stack report "not exercised".
 describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
     let h: Harness;
     let s: SwapHarness;
@@ -63,8 +63,8 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
     let wrapper: ethers.Contract;
 
     beforeAll(async () => {
-        // Three swaps' worth: the happy path plus two negatives, each of which
-        // funds its own note.
+        // Three swaps' worth: the happy path plus two negatives, each funding
+        // its own note.
         const f = await setupFile({
             nsks: TEST_NSK.swap,
             fund: [{ asset: ASSET, amount: withFee(1_000n) }],
@@ -76,7 +76,7 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
         s = setupSwapHarness();
         wrapper = new ethers.Contract(s.wrapperAddress, SWAP_WRAPPER_ABI, h.provider);
 
-        // Fund the mock router with mWBTC; the adapter needs output liquidity.
+        // The adapter needs output liquidity, so fund the mock router.
         const mWbtc = new ethers.Contract(env.token3, MOCK_ERC20_ABI, h.payer);
         await (await mWbtc.mint(s.mockSwapRouterAddress, 10_000n)).wait();
 
@@ -91,14 +91,14 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
 
     /// A note big enough for one swap.
     const fundOneSwap = () =>
-        // Plus headroom: the withdraw leg of the swap also funds a note
-        // paying the relayer, on top of the pool's unshield fee.
+        // Plus headroom: the swap's withdraw leg also funds a note paying the
+        // relayer, on top of the pool's unshield fee.
         alice.deposit({ amount: amt(SWAP_PUBLIC_OUT + FEE_HEADROOM), asset: ASSET })
             .then((r) => awaitOwn(alice, r));
 
     /// The quoter is seeded with a fixed `amountOut` for the pair, so the quote
-    /// does not depend on `amountIn` — but ask for what will actually be
-    /// swapped anyway, so the request is not quietly lying about the trade.
+    /// does not depend on `amountIn`. The request still names the amount that
+    /// will actually be swapped.
     const quoteForSwap = () =>
         quoteSwap(s, {
             chainId: env.chainId,
@@ -117,10 +117,10 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
             wrapperAddress: s.wrapperAddress,
         });
 
-    /// Run the swap and wait for both legs: the leg-1 change notes come back on
-    /// the result, but the leg-2 B note (assetOut) is escrowed by the wrapper
+    /// Run the swap and wait for both legs. The leg-1 change notes come back on
+    /// the result, but the leg-2 output-asset note is escrowed by the wrapper
     /// and materialises asynchronously through the relayer's flushBatch, so it
-    /// is only visible via a balance poll.
+    /// is visible only through a balance poll.
     const swapped = once(async () => {
         await fundOneSwap();
         const quote = await quoteForSwap();
@@ -152,24 +152,23 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
         expect(e.amountIn, "wrapper receives publicOut net of the MASP fee").toBe(WRAPPER_AMOUNT_IN);
         expect(e.actualOut, "adapter delivered what the mock was seeded with").toBe(ROUTER_OUT);
 
-        // The B note is sized by the SDK from `quote.minOut`. Rather than
-        // duplicating that rule here, tie the credited balance back to what the
-        // chain says was escrowed: everything the adapter produced is either
-        // pulled into the pool (principal + fee for the new note) or left as
-        // dust, and the note credited to Alice must account for the pulled part
-        // exactly.
+        // The output note is sized by the SDK from `quote.minOut`. Rather than
+        // duplicating that rule, the credited balance is tied back to what the
+        // chain escrowed: everything the adapter produced is either pulled into
+        // the pool (principal + fee for the new note) or left as dust, and the
+        // note credited to alice must account for the pulled part exactly.
         const pulled = (e.actualOut as bigint) - (e.dust as bigint);
         expect(withFee(outBalance, ASSET_OUT), "credited note accounts for the pulled amount")
             .toBe(pulled);
-        // The wrapper's own two guards, restated against the observed numbers:
-        // it may not pull more than the adapter produced, nor settle for less
-        // than the quote's floor.
+        // The wrapper's two guards, restated against the observed numbers: it
+        // may not pull more than the adapter produced, nor settle for less than
+        // the quote's floor.
         expect(pulled).toBeLessThanOrEqual(e.actualOut as bigint);
         expect(pulled).toBeGreaterThanOrEqual(quote.minOut);
-        expect(outBalance, "a real B note, not an empty credit").toBeGreaterThan(0n);
+        expect(outBalance, "a real note, not an empty credit").toBeGreaterThan(0n);
     }, TEST_TIMEOUT.SWAP);
 
-    /// A refused swap has to be both *explained* and *inert*.
+    /// A refused swap must be both explained and inert.
     ///
     /// The reason matters because a caller cannot fix a payload they are not
     /// told is wrong: the relayer's `eth_call` pre-flight catches these before
@@ -177,7 +176,7 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
     /// carrying the contract's own revert data.
     ///
     /// The effects matter because a rejection that still moved funds would be
-    /// far worse than one with a vague message.
+    /// worse than one with a vague message.
     async function expectSwapRefused(
         run: () => Promise<unknown>,
         reason: RegExp,
@@ -206,7 +205,7 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
     it("refuses a swap when the adapter under-delivers vs minOut", async () => {
         await fundOneSwap();
         const quote = await quoteForSwap();
-        // One unit out against a ~99-unit minOut.
+        // One unit out against a minOut of roughly 99.
         await setMockNextOut(h.payer, s, 1n);
 
         await expectSwapRefused(() => doSwap(quote), REVERT.SWAP_UNDER_MIN_OUT);

@@ -1,12 +1,12 @@
-// Reading typed events off a receipt.
+// Typed event extraction from a receipt.
 //
-// Lives outside `harness.ts` so the testkit can use it: `harness` re-exports
-// the testkit, and a testkit module importing back from `harness` closes an
-// ESM import cycle that typechecks and then bites at runtime.
+// Outside `harness.ts` so the testkit can use it: `harness` re-exports the
+// testkit, and a testkit module importing back from `harness` closes an ESM
+// import cycle.
 
 import { ethers } from "ethers";
 
-// Skips logs from foreign ABIs (ethers parseLog throws on those).
+// Logs from foreign ABIs are skipped; `parseLog` throws on those.
 export function parseContractLogs(
     receipt: ethers.TransactionReceipt | ethers.ContractTransactionReceipt | null,
     contract: ethers.Contract,
@@ -19,7 +19,7 @@ export function parseContractLogs(
             const parsed = contract.interface.parseLog(log);
             if (parsed?.name === eventName) out.push(parsed);
         } catch {
-            // wrong contract
+            // not this contract's ABI
         }
     }
     return out;

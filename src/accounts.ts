@@ -5,14 +5,14 @@ export interface AnvilAccount {
     privateKey: string;
 }
 
-// acct[0]. Runs `forge script DeployTest.s.sol`. Hard-coded into the
-// script's `tx.origin` defaults for treasury + owner.
+// acct[0]. Runs `forge script DeployTest.s.sol`. Hard-coded into the script's
+// `tx.origin` defaults for treasury + owner.
 export const DEPLOYER: AnvilAccount = {
     address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
     privateKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
 };
 
-// acct[1]. Signs every relayer-submitted `transact` tx. Contract enforces
+// acct[1]. Signs every relayer-submitted `transact` tx. The contract enforces
 // `pubInputs.relayer == msg.sender`, so bundles pin this as `relayerAddress`.
 export const RELAYER: AnvilAccount = {
     address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",

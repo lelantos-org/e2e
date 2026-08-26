@@ -1,13 +1,11 @@
-// The relayer's fee identity is committed, so nothing derives it at boot and
-// nothing would notice if the constants and the nsk drifted apart.
+// The relayer's fee identity is committed rather than derived at boot, so
+// nothing would otherwise notice the constants drifting from the nsk.
 //
-// They can drift in two ways, and both are silent until the whole stack is
-// running: an address that no longer matches the key makes the relayer refuse
-// to boot (`FeeRecipient::new` checks exactly this), and a key that no longer
-// matches the address makes it boot and then decline to flush every deposit
-// with "fee note is not addressed to this relayer".
-//
-// Re-deriving both from the nsk here turns either into a unit-test failure.
+// Both drift modes are silent until the whole stack runs: an address that no
+// longer matches the key makes the relayer refuse to boot (`FeeRecipient::new`
+// checks this), and a key that no longer matches the address makes it boot and
+// then decline to flush every deposit with "fee note is not addressed to this
+// relayer". Re-deriving both here turns either into a unit-test failure.
 
 import { describe, expect, it } from "vitest";
 

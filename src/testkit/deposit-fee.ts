@@ -1,22 +1,22 @@
 // The fee note every deposit mints.
 //
-// A deposit occupies two leaves: the depositor's note and a note paying
-// whoever flushes the batch. The second leaf is mandatory — the contract mints
-// it unconditionally — so every `buildDeposit` call needs one, including the
-// ones in tests that care about nothing but the first leaf.
+// A deposit occupies two leaves: the depositor's note and a note paying whoever
+// flushes the batch. The contract mints the second leaf unconditionally, so
+// every `buildDeposit` call needs one, including in tests concerned only with
+// the first leaf.
 //
-// `Wallet.deposit` builds this note for itself, pricing it off
-// `/v1/deposit/estimate`. These helpers are for the *direct* `buildDeposit`
-// path, which bypasses the wallet and therefore has to do it by hand.
+// `Wallet.deposit` builds this note itself, pricing it off
+// `/v1/deposit/estimate`. These helpers cover the direct `buildDeposit` path,
+// which bypasses the wallet.
 //
 // # Which one to use
 //
-// This stack runs with shielded fees on, so the choice is not cosmetic: the
-// relayer trial-decrypts the fee leaf and flushes only what pays *it*. A
-// deposit whose fee note is addressed elsewhere is skipped — correctly, and
-// forever — with "fee note is not addressed to this relayer". Anything
-// expecting a flush must use `payRelayerFee`; `unflushableFee` is only for
-// tests that assert a revert at submit time and never reach a flush.
+// This stack runs with shielded fees on: the relayer trial-decrypts the fee
+// leaf and flushes only what pays it. A deposit whose fee note is addressed
+// elsewhere is skipped indefinitely with "fee note is not addressed to this
+// relayer". Anything expecting a flush must use `relayerFeeNote`;
+// `unflushableFee` is only for tests that assert a revert at submit time and
+// never reach a flush.
 
 import type { buildDeposit } from "@lelantos-org/sdk/bundle";
 import type { Field, Jubjub } from "@lelantos-org/sdk/crypto";
@@ -42,14 +42,14 @@ export interface FeeRng {
 }
 
 /**
- * What the relayer wants to flush one deposit in `asset`, in circuit units.
+ * What the relayer charges to flush one deposit in `asset`, in circuit units.
  *
  * Read from `/v1/deposit/estimate` rather than hardcoded: it is derived from
- * live gas, and the relayer re-derives it when the deposit surfaces. A
- * constant would pass until gas moved and then strand deposits until their
- * cancel delay.
+ * live gas, and the relayer re-derives it when the deposit surfaces. A constant
+ * would hold until gas moved and would then strand deposits until their cancel
+ * delay.
  *
- * Separate from [`relayerFeeNote`] so a test minting several deposits pays for
+ * Separate from `relayerFeeNote` so a test minting several deposits pays for
  * one quote rather than one per deposit.
  */
 export async function quoteDepositFee(
@@ -75,20 +75,19 @@ export function relayerFeeNote(J: Jubjub, value: bigint, rngs: FeeRng): DepositF
 }
 
 /**
- * A zero-value fee note addressed to the depositor themselves.
+ * A zero-value fee note addressed to the depositor.
  *
- * Named for what it costs, not what it contains: the leaf is well-formed and
- * the deposit is escrowed, but no relayer will ever flush it, so the payer's
- * funds sit until they cancel. That is the right shape *only* for a test that
- * asserts the submit reverts — reach for `payRelayerFee` everywhere else.
+ * The leaf is well-formed and the deposit is escrowed, but no relayer will
+ * flush it, so the payer's funds sit until they cancel. Correct only for a test
+ * that asserts the submit reverts; use `relayerFeeNote` everywhere else.
  */
 export function unflushableFee(recipient: Recipient, rngs: FeeRng): DepositFeeArg {
     return feeNote(recipient, 0n, rngs);
 }
 
 /**
- * Randomness is drawn from the same counters as the depositor's note so a
- * test's draws stay sequential and reproducible — `buildDeposit` consumes them
+ * Randomness is drawn from the same counters as the depositor's note, so a
+ * test's draws stay sequential and reproducible: `buildDeposit` consumes them
  * in a fixed order, and interleaving a second source makes reruns diverge.
  */
 function feeNote(recipient: Recipient, value: bigint, { rng, auxRng }: FeeRng): DepositFeeArg {
@@ -104,14 +103,14 @@ function feeNote(recipient: Recipient, value: bigint, { rng, auxRng }: FeeRng): 
 }
 
 /**
- * The relayer fee a completed deposit actually escrowed, in circuit units.
+ * The relayer fee a completed deposit escrowed, in circuit units.
  *
  * Read from the deposit's own `DepositEscrowed` log rather than re-quoting the
- * relayer. The wallet priced the note at submit time off its own estimate, and
- * a fresh quote a few blocks later can differ — gas moves. Only the event says
- * what was really escrowed, and that is what the payer was debited for.
+ * relayer: the wallet priced the note at submit time, and a fresh quote a few
+ * blocks later can differ because gas moves. The event is what the payer was
+ * debited for.
  *
- * Zero on a subsidised chain, so a caller can use it unconditionally.
+ * Zero on a subsidised chain, so callers can use it unconditionally.
  */
 export async function depositFeePaid(
     provider: ethers.Provider,

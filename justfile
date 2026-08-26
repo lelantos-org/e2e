@@ -5,16 +5,17 @@ ROOT := justfile_directory()
 default:
     @just --list
 
-# Run vitest. globalSetup boots the stack (postgres + anvil + 7 backends),
-# host runs forge against anvil, then tests run against host-mapped ports.
+# Run vitest. globalSetup boots the stack (postgres, anvil, oracle and the
+# backend services), runs forge against anvil from the host, then the tests run
+# against the host-mapped ports.
 test:
     cd "{{ROOT}}" && npm test
 
-# Typecheck src/ + tests/ (nothing else compiles this package).
+# Typecheck src/ and tests/; nothing else compiles this package.
 check:
     cd "{{ROOT}}" && npm run typecheck
 
-# Run one file, or one test within it (still boots the whole stack).
+# Run one file, or one test within it. Still boots the whole stack.
 test-file FILE *ARGS:
     cd "{{ROOT}}" && npx vitest run "{{FILE}}" {{ARGS}}
 
@@ -22,27 +23,25 @@ test-file FILE *ARGS:
 logs:
     tail -F "${E2E_LOG_DIR:-/tmp/e2e-logs}"/*.log
 
-# Bring the stack up and keep it alive (ctrl-c to tear down). Useful when
-# poking with curl from the host.
+# Bring the stack up and hold it until ctrl-c, for querying it from the host.
 up:
     cd "{{ROOT}}" && npm run up
 
 deploy:
     cd "{{ROOT}}" && npm run deploy
 
-# Download tree_update_batch artifacts (wasm/r1cs/zkey) used by the relayer's
-# prover. Version is taken from node_modules/@lelantos-org/circuits/package.json.
-# Idempotent — skips when ./circuits/.version matches. Stack.up() also runs it.
+# Download the tree_update_batch artifacts (wasm/r1cs/zkey) the relayer's prover
+# reads. The version comes from node_modules/@lelantos-org/circuits/package.json.
+# Idempotent: skips when ./circuits/.version matches. Stack.up() also runs it.
 fetch-circuits:
     cd "{{ROOT}}" && ./scripts/fetch-circuits.sh
 
-# Remove a stack left behind by a hard kill (running or stopped).
-# Ryuk reaps the stack by itself (see src/setup.ts), so this only matters when
-# Ryuk was killed alongside the suite or switched off. Selects by testcontainers
-# label rather than by image: a leaked container whose image has since been
-# rebuilt runs untagged layers that no `--ancestor` filter would match.
-# `lang=node` is what keeps it inside this suite — other testcontainers clients
-# label their containers differently.
+# Remove a stack left behind by a hard kill, running or stopped. Ryuk reaps the
+# stack on its own (see src/setup.ts), so this matters only when Ryuk was killed
+# alongside the suite or switched off. Selects by testcontainers label rather
+# than by image: a leaked container whose image has since been rebuilt runs
+# untagged layers that no `--ancestor` filter matches. `lang=node` keeps the
+# selection inside this suite; other testcontainers clients label differently.
 [doc('Remove a stack Ryuk did not clean up (fallback)')]
 down:
     @docker ps -aq --filter label=org.testcontainers.lang=node | xargs -r docker rm -f

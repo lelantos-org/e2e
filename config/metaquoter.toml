@@ -1,6 +1,6 @@
 # MetaQuoter config for the e2e harness. Mounted at /etc/metaquoter.toml.
-# Container env (set by services.ts) overrides every per-chain field at
-# runtime — TOML defaults exist only so the binary can boot without env.
+# Container env (set by services.ts) overrides every per-chain field at runtime;
+# the TOML defaults exist only so the binary can boot without env.
 
 listen_addr = "0.0.0.0:8081"
 race_deadline_ms = 1500
@@ -12,5 +12,5 @@ rpc_url = "http://anvil:8545"
 univ3_quoter = "0x0000000000000000000000000000000000000000"
 # Overridden by METAQUOTER_CHAIN_31337_UNIV3_ADAPTER (set by stack.ts).
 univ3_adapter = "0x0000000000000000000000000000000000000000"
-# Mirrors e2e/src/constants.ts FEE_BPS; overridden by env.
+# Mirrors FEE_BPS in src/protocol/amounts.ts; overridden by env.
 masp_fee_bps = 0

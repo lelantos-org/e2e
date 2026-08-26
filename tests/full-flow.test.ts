@@ -42,11 +42,12 @@ import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 const { alice: ALICE_NSK, bob: BOB_NSK } = TEST_NSK.fullFlow;
 
 // Sized with room for the relayer's shielded fee on each spend leg: the
-// transfer and the withdraw each pay one, and a wallet can never spend its
-// whole balance because the fee note comes out of the same inputs.
+// transfer and the withdraw each pay one out of the same inputs, so a wallet
+// cannot spend its whole balance.
 const DEPOSIT = 125n;
 const TO_BOB = 60n;
-// SDK `amount` on a withdraw is net-to-recipient; publicOut = amount + fee.
+// The SDK's `amount` on a withdraw is net to the recipient; publicOut = amount
+// + fee.
 const WITHDRAW_NET = 40n;
 const WITHDRAW_PUBLIC_OUT = 42n;
 
@@ -55,10 +56,9 @@ describe("masp e2e flow", () => {
     let erc20: Erc20Helpers;
     let alice: SdkWallet;
     let bob: SdkWallet;
-    // Leaf count when this file started. Every file in the suite shares one
-    // anvil and one MASP, so leaf assertions are deltas against this — an
-    // absolute count would only hold when this file happened to run first,
-    // and vitest orders files differently cold vs. warm-cache.
+    // Leaf count when this file started. Every file shares one anvil and one
+    // MASP, so leaf assertions are deltas against this; an absolute count would
+    // hold only when this file ran first.
     let leavesAtStart: bigint;
 
     /// Mirrors `PubInputs.LEAVES_PER_DEPOSIT`: the depositor's note plus the
@@ -79,10 +79,10 @@ describe("masp e2e flow", () => {
         leavesAtStart = (await h.masp.committedCount()) as bigint;
     });
 
-    // The three legs are one narrative: the transfer spends the deposit's note
+    // The three legs form one narrative: the transfer spends the deposit's note
     // and the withdraw spends the transfer's change. Each is a memoised stage
-    // rather than an `it` that leaves state behind for its siblings, so any
-    // single `it` can be run with `-t` and pulls in exactly the prefix it needs.
+    // rather than an `it` leaving state for its siblings, so any single `it` can
+    // be run with `-t` and pulls in exactly the prefix it needs.
 
     const deposited = once(async () => {
         const before = await snapshotBalances(erc20);
@@ -93,8 +93,8 @@ describe("masp e2e flow", () => {
             onPhase: (p) => phases.push(p),
         });
         await awaitOwn(alice, r);
-        // What the deposit actually escrowed for the relayer, read from its
-        // own event — the payer was debited for it on top of principal + fee.
+        // What the deposit escrowed for the relayer, read from its own event:
+        // the payer was debited for it on top of principal + fee.
         const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
         return { before, phases, relayerFee, leaves: await leavesSinceStart() };
     });
@@ -137,8 +137,8 @@ describe("masp e2e flow", () => {
 
         expect(alice.balance(ASSET)).toBe(DEPOSIT);
         // A deposit occupies two leaves: alice's note and the note paying
-        // whoever flushed the batch. Only the first is alice's, which is why
-        // her balance above is the full deposit and not a leaf count.
+        // whoever flushes the batch. Only the first is hers, which is why her
+        // balance above is the full deposit.
         expect(leaves, "leaves added by the deposit").toBe(LEAVES_PER_DEPOSIT);
     }, TEST_TIMEOUT.SPEND);
 
@@ -154,7 +154,6 @@ describe("masp e2e flow", () => {
         // The relayer's fee comes out of alice's inputs, not bob's note.
         expect(alice.balance(ASSET)).toBe(DEPOSIT - TO_BOB - fee);
         expect(bob.balance(ASSET)).toBe(TO_BOB);
-        // 1 deposit leaf + N_OUT spend leaves.
         expect(leaves, "leaves after deposit + transfer").toBe(
             LEAVES_PER_DEPOSIT + BigInt(N_OUT),
         );
@@ -164,7 +163,8 @@ describe("masp e2e flow", () => {
         const { before, fee, leaves } = await withdrawn();
         const { fee: transferFee } = await transferred();
 
-        // Contract fee is on publicOut*scale: recipient = publicOut*scale*(1-feeBps).
+        // The contract fee applies to publicOut*scale, so the recipient
+        // receives publicOut*scale*(1-feeBps).
         const recipientNet = baseAmt(WITHDRAW_PUBLIC_OUT) - feeFor(WITHDRAW_PUBLIC_OUT);
         await expectBalanceDeltas(erc20, trackedAddrs(), before, {
             payer: 0n,
@@ -182,13 +182,13 @@ describe("masp e2e flow", () => {
     }, TEST_TIMEOUT.SPEND);
 
     it("deposit reverts when Permit2 maxTotal cannot cover principal + fee", async () => {
-        // SDK Wallet computes maxTotal internally; use the direct-path helper to
-        // force an undersized one. The pool asks Permit2 for principal + fee but
-        // the payer only signed for the principal, so Permit2 rejects the
-        // transfer as exceeding the permitted amount.
+        // `Wallet.deposit` computes maxTotal internally, so the direct path is
+        // used to force an undersized one. The pool asks Permit2 for principal
+        // + fee while the payer signed for the principal alone, so Permit2
+        // rejects the transfer as exceeding the permitted amount.
         const aliceRng = counter(0xff_a1ce_0099n);
         const auxRng = newAuxRng(0xff_add_0099n);
-        const aliceLegacy = makeWallet(h.P, h.J, ALICE_NSK);
+        const aliceKeys = makeWallet(h.P, h.J, ALICE_NSK);
         const built = buildDeposit({
             P: h.P,
             J: h.J,
@@ -197,9 +197,9 @@ describe("masp e2e flow", () => {
             payerAddress: env.payerAddress,
             recipientAddress: env.recipientAddress,
             publicIn: 50n,
-            recipient: aliceLegacy.recipient,
+            recipient: aliceKeys.recipient,
             output0: { rho: aliceRng(), rcm: aliceRng(), rcv: aliceRng(), rcvDep: aliceRng(), aux: rngForOutput(auxRng) },
-            fee: unflushableFee(aliceLegacy.recipient, { rng: aliceRng, auxRng }),
+            fee: unflushableFee(aliceKeys.recipient, { rng: aliceRng, auxRng }),
         });
         await expectRevert(
             submitDepositDirect({
@@ -216,12 +216,8 @@ describe("masp e2e flow", () => {
 
     it("treasury accrues 5% on deposit + withdraw legs", async () => {
         await withdrawn();
-        const view = new ethers.Contract(env.maspAddress, [
-            "function feeBps() view returns (uint16)",
-            "function treasury() view returns (address)",
-        ], h.provider);
-        expect(await view.feeBps()).toBe(FEE_BPS);
-        expect((await view.treasury()) as string).not.toBe(ethers.ZeroAddress);
+        expect(await h.masp.feeBps()).toBe(FEE_BPS);
+        expect((await h.masp.treasury()) as string).not.toBe(ethers.ZeroAddress);
         // Lower bound: `accruedFee` is cumulative and the MASP is shared, so
         // other files depositing asset 2 raise it.
         expect(await accruedFee(h.provider, env.token2))
@@ -230,8 +226,8 @@ describe("masp e2e flow", () => {
 
     it("client sync: fresh wallet recovers bob's 60-unit balance", async () => {
         await transferred();
-        // Fresh in-process wallet for bob — empty note store. sync() must
-        // pull, trial-decrypt, and surface the 60-unit note for asset 2.
+        // A fresh in-process wallet for bob, with an empty note store: `sync()`
+        // must pull, trial-decrypt and surface the 60-unit note for asset 2.
         const bobFresh = await createTestWallet(BOB_NSK);
         await bobFresh.sync({ limit: SYNC_LIMIT });
         expect(bobFresh.balance(ASSET)).toBe(TO_BOB);

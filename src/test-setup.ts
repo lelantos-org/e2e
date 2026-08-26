@@ -7,6 +7,6 @@ import { afterAll } from "vitest";
 
 import { disposeTestWallets } from "./wallet.js";
 
-// The suite runs in a single fork, so a wallet built in one file would
-// otherwise hold its scanner and prover for every file that follows.
+// The suite runs in a single fork: without this, a wallet built in one file
+// holds its scanner and prover for every file that follows.
 afterAll(disposeTestWallets);

@@ -1,24 +1,22 @@
 // The relayer's shielded fee identity.
 //
-// Turning on `shielded_fee_address` makes the relayer charge for both paths at
-// once: every spend must carry an output note addressed here, and every
-// deposit's second leaf must be a note this identity can decrypt and spend.
-// A relayer that cannot read its own fee note simply declines to flush, so the
-// address and the viewing key have to describe the same identity — the relayer
-// refuses to boot otherwise (`FeeRecipient::new`).
+// Setting `shielded_fee_address` enables charging on both paths: every spend
+// must carry an output note addressed here, and every deposit's second leaf
+// must be a note this identity can decrypt and spend. A relayer that cannot
+// read its own fee note declines to flush, so the address and the viewing key
+// must describe the same identity — the relayer refuses to boot otherwise
+// (`FeeRecipient::new`).
 //
-// # These are committed on purpose
+// These constants are committed. They are a test identity for a
+// throwaway anvil, and pinning them makes the stack reproducible: the relayer's
+// config, the address wallets pay, and the wallet the suite uses to check the
+// fee arrived are one identity by construction rather than by three
+// derivations agreeing at runtime.
 //
-// They are a *test* identity for a throwaway anvil, and pinning them makes the
-// stack reproducible: the relayer's config, the address wallets pay, and the
-// wallet the suite uses to check the fee arrived are all the same identity by
-// construction rather than by three derivations agreeing at runtime.
-//
-// `ivk` is decrypt-only — it recognises notes and reads their value, and
-// confers no authority to move them. `RELAYER_FEE_NSK` is the spending key and
-// is here only so the suite can build a wallet that *spends* the collected
-// fees, proving the notes are real. Nothing outside this repo should ever see
-// an nsk in source.
+// `ivk` is decrypt-only: it recognises notes and reads their value, and confers
+// no authority to move them. `RELAYER_FEE_NSK` is the spending key, present so
+// the suite can build a wallet that spends the collected fees and prove the
+// notes are real.
 
 /**
  * nsk of the identity the relayer is paid at.
@@ -33,7 +31,7 @@ export const RELAYER_FEE_NSK = 0xfee_1_a1_e40n;
  * key the relayer is configured with.
  *
  * Regenerate with `buildSpendingKey(P, J, RELAYER_FEE_NSK)` and
- * `encodeAddress(J, pk_d, pk, ck)` — `tests/shielded-fee.test.ts` re-derives
+ * `encodeAddress(J, pk_d, pk, ck)`. `tests/shielded-fee.test.ts` re-derives
  * both and fails if either drifts from the nsk above.
  */
 export const RELAYER_FEE_ADDRESS =

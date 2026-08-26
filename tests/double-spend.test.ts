@@ -17,9 +17,8 @@ import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.doubleSpend;
 const DEPOSIT_AMT = amt(50n);
-// Less than the deposit: the spend also has to fund the relayer's fee note,
-// so a wallet can never send its entire balance. The exact amount is
-// incidental — this file is about spending one note twice.
+// Less than the deposit: the spend also funds the relayer's fee note, so a
+// wallet cannot send its entire balance. The exact amount is incidental.
 const SEND_AMT = amt(40n);
 
 describe("double-spend rejection", () => {
@@ -33,7 +32,7 @@ describe("double-spend rejection", () => {
         }));
     });
 
-    /// Alice's spendable note, plus a clone of her wallet synced *before* the
+    /// Alice's spendable note, plus a clone of her wallet synced before the
     /// note is spent. The clone is the attacker: same nsk, same note, no
     /// knowledge that the nullifier has since been published.
     const funded = once(async () => {
@@ -59,10 +58,10 @@ describe("double-spend rejection", () => {
 
     it("first transfer spends alice's note (succeeds)", async () => {
         const { fee } = await spent();
-        // Not zero: the note is consumed, but the change comes back minus
-        // what the relayer was paid to relay it.
+        // Not zero: the note is consumed, but the change returns minus what
+        // the relayer was paid.
         expect(alice.balance(ASSET)).toBe(DEPOSIT_AMT - SEND_AMT - fee);
-        // bob's local store is empty until awaitCommitments fires.
+        // bob's local store stays empty until his side is awaited.
         expect(bob.balance(ASSET)).toBe(0n);
     }, TEST_TIMEOUT.SPEND);
 
@@ -70,14 +69,14 @@ describe("double-spend rejection", () => {
         const { stale } = await funded();
         await spent();
         // The clone still believes the note is unspent, so it builds a
-        // structurally valid spend over an already-published nullifier. In
-        // practice the relayer catches it before the pool does — see
+        // structurally valid spend over an already-published nullifier. The
+        // relayer usually catches it before the pool does; see
         // `REVERT.NULLIFIER_SPENT` for why both layers are accepted.
         await expectRevert(
             stale.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET }),
             REVERT.NULLIFIER_SPENT,
         );
-        // The note is still Alice's, unspent value never moved to bob twice.
+        // Value never reached bob twice.
         expect(bob.balance(ASSET), "no second credit to bob").toBe(0n);
     }, TEST_TIMEOUT.SPEND);
 });

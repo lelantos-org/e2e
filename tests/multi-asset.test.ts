@@ -28,8 +28,8 @@ const DEPOSIT_MDAI = amt(20n);
 const WITHDRAW_WETH = amt(5n);
 const WITHDRAW_MDAI = amt(10n);
 
-// At these magnitudes integer division zeroes the SDK fee, so net delta
-// simplifies to baseAmt(amount) - feeFor(amount).
+// At these magnitudes integer division floors the SDK fee to zero, so the net
+// delta simplifies to baseAmt(amount) - feeFor(amount).
 const SHIELD_FEE_WETH = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const SHIELD_FEE_MDAI = feeFor(DEPOSIT_MDAI, ASSET_MDAI);
 const UNSHIELD_FEE_WETH = feeFor(WITHDRAW_WETH, ASSET_WETH);
@@ -57,8 +57,8 @@ describe("multi-asset deposit + withdraw", () => {
         mdai = f.token(ASSET_MDAI);
     });
 
-    /// One deposit-then-withdraw round trip for an asset, memoised per asset so
-    /// the withdraw `it` can be run alone and still have a note to spend.
+    /// One deposit-then-withdraw round trip, memoised per asset so the
+    /// withdraw `it` can run alone and still have a note to spend.
     function roundTrip(
         token: () => Erc20Helpers,
         asset: AssetId,
@@ -69,8 +69,8 @@ describe("multi-asset deposit + withdraw", () => {
             const before = await snapshotBalances(token());
             const r = await alice.deposit({ amount: deposit, asset });
             await awaitOwn(alice, r);
-            // Read from the deposit's own event: the payer was debited for
-            // this on top of principal and the pool's shield fee.
+            // Read from the deposit's own event: the payer was debited for it
+            // on top of principal and the pool's shield fee.
             const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
             return { before, relayerFee, after: await snapshotBalances(token()) };
         });
@@ -109,8 +109,8 @@ describe("multi-asset deposit + withdraw", () => {
         const { before, fee, after } = await wethLegs.withdrawn();
         expect(after.recipient - before.recipient).toBe(NET_WITHDRAW_WETH);
         expect(before.masp - after.masp).toBe(NET_WITHDRAW_WETH);
-        // The relayer's fee stays inside the pool as a note, so it never shows
-        // in the public deltas above — only in what alice has left.
+        // The relayer's fee stays in the pool as a note, so it shows only in
+        // what alice has left, never in the public deltas above.
         expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
     }, TEST_TIMEOUT.SPEND);
 
@@ -126,7 +126,7 @@ describe("multi-asset deposit + withdraw", () => {
         // the same payer account, so overlapping them races the nonce.
         await wethLegs.withdrawn();
         await mdaiLegs.withdrawn();
-        // Lower bound: cumulative counter on a shared MASP.
+        // Lower bound: the counter is cumulative on a shared MASP.
         expect(await accruedFee(h.provider, env.token1))
             .toBeGreaterThanOrEqual(SHIELD_FEE_WETH + UNSHIELD_FEE_WETH);
         expect(await accruedFee(h.provider, env.token2))

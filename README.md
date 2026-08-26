@@ -1,10 +1,10 @@
 # E2E — full-stack integration tests
 
-Boots the Lelantos stack (Postgres, Anvil, seven backend services) with
-[testcontainers-node][tc] and exercises deposit, shielded transfer, withdraw,
-swap and FMD-driven sync end to end. The test process owns container
-lifecycle, so failures surface as host-side stack traces and no image rebuild
-is needed to add logging.
+Boots the Lelantos stack (Postgres, Anvil, a static price oracle and seven
+backend services) with [testcontainers-node][tc] and exercises deposit,
+shielded transfer, withdraw, swap and FMD-driven sync end to end. The test
+process owns the container lifecycle, so failures surface as host-side stack
+traces and adding logging needs no image rebuild.
 
 ## Tests
 
@@ -13,7 +13,7 @@ Files run serially in path order, so `tests/` precedes `tests/edge/` and
 
 | Spec | Cases | Covers |
 |---|---|---|
-| [batch-flush](tests/batch-flush.test.ts) | 1 | Three deposits submitted in parallel, drained by the relayer into a single `flushBatch` transaction. |
+| [batch-flush](tests/batch-flush.test.ts) | 1 | Two deposits submitted in parallel, drained by the relayer into a single `flushBatch` transaction. |
 | [client-resync](tests/client-resync.test.ts) | 2 | Two deposits and two transfers, then a wallet built from the key alone reconstructs the recipient's balance from the chunk feed. |
 | [deposit-native](tests/deposit-native.test.ts) | 4 | `asEth` deposit through `NativeAdapter`: coin spent rather than WETH, pool credited, no residue on the adapter, fee accrued, resulting note spendable. Skipped without a native adapter. |
 | [double-spend](tests/double-spend.test.ts) | 3 | A note is deposited and spent, then replayed from a stale wallet and rejected. |

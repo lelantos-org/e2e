@@ -1,6 +1,7 @@
-// Circuit and tree geometry. Every value here is pinned by something outside
-// this repo — change one and the verifier, the contracts or the asset registry
-// stops agreeing with it.
+// Circuit and tree geometry, pinned to artifacts outside this repo. Change one
+// and the verifier, the contracts or the asset registry stops agreeing with it.
+// Kept as a complete reference table, so entries the suite does not currently
+// read are still listed.
 
 // Must match `circuits/4x4.circom` `Transact(N_IN, N_OUT, GAMMA, DEPTH)`.
 export const TREE_DEPTH = 10;

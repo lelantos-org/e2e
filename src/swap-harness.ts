@@ -1,12 +1,7 @@
 // Test-side controls for the swap stack: resolve the deployed addresses, ask
 // the metaquoter for a quote, and drive the mock quoter/router so a swap's
-// output is deterministic.
-//
-// The swap itself is driven through the SDK's `Wallet.swap`. A hand-rolled
-// two-leg builder used to live here as well; it was never called by a test and
-// no longer compiled against the SDK (`RelayerClient.path` is gone — the
-// wallet folds its own tree from the chunk feed now), so it was removed rather
-// than left to rot.
+// output is deterministic. The swap itself runs through the SDK's
+// `Wallet.swap`.
 
 import { ethers } from "ethers";
 
@@ -15,7 +10,6 @@ import { fetchSwapQuote, type SwapQuote, type SwapQuoteRequest } from "@lelantos
 
 import { MOCK_QUOTER_V2_ABI, MOCK_SWAP_ROUTER_ABI } from "./protocol/abi.js";
 import { env } from "./env.js";
-import { PROVER_PATHS } from "./testkit/prover.js";
 
 export interface SwapHarness {
     metaquoterUrl: string;
@@ -59,5 +53,3 @@ export async function setMockNextOut(
     const c = new ethers.Contract(s.mockSwapRouterAddress, MOCK_SWAP_ROUTER_ABI, payer);
     await (await c.setNextOut(nextOut)).wait();
 }
-
-export { PROVER_PATHS };

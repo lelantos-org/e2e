@@ -1,5 +1,4 @@
-// Addresses that are fixed by something outside this repo, rather than
-// assigned by our deploy.
+// Addresses fixed outside this repo, rather than assigned by the deploy.
 
 /**
  * Permit2's deterministic deployment address, identical on every chain.

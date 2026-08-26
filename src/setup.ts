@@ -7,7 +7,8 @@ import type { StackEnv } from "./stack.js";
 import { log } from "./utils.js";
 
 export default async function setup() {
-    // Dynamic import: env tweaks above must land before testcontainers loads.
+    // Dynamic import: the env tweaks above must land before testcontainers
+    // loads.
     const { Stack } = await import("./stack.js");
     const stack = new Stack();
 
@@ -33,7 +34,7 @@ export default async function setup() {
 
     return async () => {
         if (keepAlive()) {
-            log("E2E_KEEP_ALIVE=1 → leaving stack running (reaper off; `just down` to clean up)");
+            log("E2E_KEEP_ALIVE=1: leaving the stack running (reaper off; `just down` to clean up)");
             return;
         }
         log("tearing down stack…");
@@ -59,23 +60,21 @@ function resolveDockerHost(): void {
  * Let Ryuk reap the stack when this process dies before its teardown runs.
  *
  * Ryuk is itself a container: it watches the docker socket and removes
- * everything carrying our session id once the client disconnects. So it needs
- * that socket bind-mounted, and testcontainers mounts whatever path
- * `DOCKER_HOST` names. On colima that is a *host* path
+ * everything carrying this session's id once the client disconnects. It
+ * therefore needs that socket bind-mounted, and testcontainers mounts whatever
+ * path `DOCKER_HOST` names. On colima that is a host path
  * (`~/.colima/default/docker.sock`) which does not exist inside the VM where
- * Ryuk runs — the mount resolves to nothing, Ryuk never logs "Started", and
- * its startup wait times out. That failure is why Ryuk used to be switched
- * off here altogether, leaving a hard kill to strand the whole stack.
+ * Ryuk runs: the mount resolves to nothing, Ryuk never logs "Started", and its
+ * startup wait times out. Naming the in-VM path avoids that.
  *
- * Naming the in-VM path fixes it. Only a unix socket needs the override; a
- * TCP `DOCKER_HOST` (remote docker, some CI setups) has no socket to mount
- * and Ryuk reaches the daemon over the network instead.
+ * Only a unix socket needs the override. A TCP `DOCKER_HOST` (remote docker,
+ * some CI setups) has no socket to mount and Ryuk reaches the daemon over the
+ * network.
  *
- * `E2E_KEEP_ALIVE=1` turns it off, because that flag means "leave the stack up
- * so I can read its logs" and Ryuk would take it down the moment the run ends
- * — the two cannot both be honoured. `TESTCONTAINERS_RYUK_DISABLED=true` also
- * works if you want the reaper off without keeping the stack. Either way
- * `just down` is the manual cleanup.
+ * `E2E_KEEP_ALIVE=1` disables the reaper, since it means "leave the stack up
+ * to read its logs" and Ryuk would remove it as soon as the run ends.
+ * `TESTCONTAINERS_RYUK_DISABLED=true` disables the reaper without keeping the
+ * stack. Either way, `just down` is the manual cleanup.
  */
 function enableRyuk(): void {
     if (keepAlive()) {
@@ -89,7 +88,7 @@ function enableRyuk(): void {
 
 /**
  * Leave the stack running after the suite finishes, for `docker logs` and
- * `curl` against the mapped ports. Skips teardown *and* the reaper.
+ * `curl` against the mapped ports. Skips teardown and the reaper.
  */
 function keepAlive(): boolean {
     return process.env.E2E_KEEP_ALIVE === "1";
@@ -98,7 +97,6 @@ function keepAlive(): boolean {
 function publishEnv(e: StackEnv): void {
     process.env.RELAYER_URL = e.relayer;
     process.env.FMD_URL = e.fmd;
-    process.env.EXPLORER_URL = e.explorer;
     process.env.RPC_URL = e.rpc;
     process.env.CHAIN_ID = e.chainId;
     process.env.MASP_ADDRESS = e.masp;

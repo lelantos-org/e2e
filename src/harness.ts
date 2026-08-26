@@ -1,3 +1,6 @@
+// The barrel every test file imports from: the shared stack handle, the direct
+// (non-SDK) deposit path, and re-exports of everything under `src/`.
+
 import { ethers } from "ethers";
 
 import { Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
@@ -8,23 +11,21 @@ import { RelayerClient } from "@lelantos-org/sdk/relayer";
 
 import { RELAYER } from "./accounts.js";
 import { MASP_ABI, MASP_DEPOSIT_ABI } from "./protocol/abi.js";
-import { ASSET, scaleFor } from "./protocol/assets.js";
-export { parseContractLogs } from "./protocol/logs.js";
-import { parseContractLogs } from "./protocol/logs.js";
 import { FEE_HEADROOM } from "./protocol/amounts.js";
+import { ASSET, scaleFor } from "./protocol/assets.js";
+import { parseContractLogs } from "./protocol/logs.js";
 import { TREE_DEPTH } from "./protocol/shape.js";
 import { PROVER_PATHS } from "./testkit/prover.js";
 import { TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
-import { ExplorerClient } from "./explorer-client.js";
 import { type Erc20Helpers, setupErc20, setupWeth } from "./scenario.js";
 import { payerEthSigner } from "./signers.js";
 import { rpcProvider, SerialWallet, settleNonce } from "./tx.js";
 import { counter, pollUntil } from "./utils.js";
 
-// Test files should pass a file-unique seed; cross-file collisions produce
-// identical FMD clues + ECDH ephemerals on the shared anvil.
-export const AUX_RNG_SEED = 0xfacecafen;
+// Test files pass a file-unique seed: cross-file collisions produce identical
+// FMD clues and ECDH ephemerals on the shared anvil.
+const AUX_RNG_SEED = 0xfacecafen;
 export const newAuxRng = (seed: bigint = AUX_RNG_SEED) => counter(seed);
 
 export interface Harness {
@@ -35,7 +36,6 @@ export interface Harness {
     masp: ethers.Contract;
     relayer: RelayerClient;
     fmd: FmdClient;
-    explorer: ExplorerClient;
     bundleCommon(asset?: bigint): {
         P: Poseidon;
         J: Jubjub;
@@ -47,18 +47,13 @@ export interface Harness {
         proverPaths: typeof PROVER_PATHS;
         treeDepth: number;
     };
-    currentRoot(): Promise<bigint>;
-}
-
-export interface SetupOpts {
-    fund?: { kind: "erc20" | "weth"; token: string; amount: bigint }[];
 }
 
 let _P: Promise<Poseidon> | undefined;
 let _J: Promise<Jubjub> | undefined;
 
-// Mirrors the asset registry fixture the stack deploys. `weth` is the only
-// wrapped-native entry; the rest are plain mocks with a public `mint`.
+// Mirrors the asset registry fixture the stack deploys. WETH is the only
+// wrapped-native entry; the rest are mocks with a public `mint`.
 export function tokenAddressFor(asset: bigint): { address: string; kind: "erc20" | "weth" } {
     switch (asset) {
         case 1n: return { address: env.token1, kind: "weth" };
@@ -71,17 +66,15 @@ export function tokenAddressFor(asset: bigint): { address: string; kind: "erc20"
 /**
  * Mint (or wrap) `baseUnits` of `asset` for the payer, plus slack for fees.
  *
- * The slack is not optional accounting. Every deposit now pulls a third
- * amount on top of principal and the pool's protocol fee — the note paying
- * whoever flushes it — and callers size `baseUnits` with `withFee`, which
- * covers only the first two. Funding exactly `withFee` leaves the Permit2
- * pull short and reverts inside the token with `TRANSFER_FROM_FAILED`, which
- * names neither the fee nor the deposit.
+ * Every deposit pulls a third amount on top of principal and the pool's
+ * protocol fee: the note paying whoever flushes it. Callers size `baseUnits`
+ * with `withFee`, which covers only the first two, so funding exactly `withFee`
+ * leaves the Permit2 pull short and reverts inside the token with
+ * `TRANSFER_FROM_FAILED`, naming neither the fee nor the deposit.
  *
- * Added here rather than at each call site because this is the one place that
- * decides what the payer needs, and because the charge moves with gas — a
- * caller computing it would be pinning a number that is only right until the
- * next block.
+ * The slack is added here rather than at each call site because this is the one
+ * place that decides what the payer needs, and because the charge moves with
+ * gas.
  */
 export async function fundPayerForAsset(
     h: Harness,
@@ -95,30 +88,25 @@ export async function fundPayerForAsset(
         : setupErc20(h.payer, address, env.permit2Address, funded);
 }
 
-export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
+export async function setupHarness(): Promise<Harness> {
     const P = await (_P ??= Poseidon.build());
     const J = await (_J ??= Jubjub.build());
     const provider = rpcProvider(env.rpcUrl);
-    // Vitest reuses one anvil; flush so file N's nonce query is not stale.
+    // Vitest reuses one anvil, so flush first: file N's nonce query must not
+    // read stale state.
     await flushMempool(provider);
-    // `SerialWallet` re-reads the `pending` nonce from anvil on every send —
-    // no local cache, because the SDK's viem PrivateKeySigner sends from the
-    // same account and a NonceManager's counter would diverge from chain state
-    // and trip "nonce too low". What it adds over a plain Wallet is a
-    // process-wide send queue plus a retry when an SDK send wins the race
-    // anyway (see `tx.ts`).
+    // `SerialWallet` re-reads the `pending` nonce from anvil on every send. It
+    // keeps no local cache, because the SDK's viem `PrivateKeySigner` sends
+    // from the same account and a local counter would diverge from chain state
+    // and trip "nonce too low". Over a plain `Wallet` it adds a process-wide
+    // send queue and a retry for the case where an SDK send wins the race
+    // anyway; see `tx.ts`.
     const payer = new SerialWallet(env.payerKey, provider);
-    // ...and don't start until the previous file's txs have left the pool.
+    // Wait for the previous file's transactions to leave the pool.
     await settleNonce(provider, payer.address);
     const masp = new ethers.Contract(env.maspAddress, MASP_ABI, provider);
     const relayer = new RelayerClient(env.relayerUrl);
     const fmd = new FmdClient(env.fmdUrl, env.chainId);
-    const explorer = new ExplorerClient(env.explorerUrl, env.chainId);
-
-    for (const f of opts.fund ?? []) {
-        if (f.kind === "weth") await setupWeth(payer, f.token, env.permit2Address, f.amount);
-        else await setupErc20(payer, f.token, env.permit2Address, f.amount);
-    }
 
     await waitForFmdHealth();
 
@@ -130,7 +118,6 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
         masp,
         relayer,
         fmd,
-        explorer,
         bundleCommon: (asset = ASSET) => ({
             P,
             J,
@@ -142,7 +129,6 @@ export async function setupHarness(opts: SetupOpts = {}): Promise<Harness> {
             proverPaths: PROVER_PATHS,
             treeDepth: TREE_DEPTH,
         }),
-        currentRoot: async () => (await fmd.fetchTreeState()).root,
     };
 }
 
@@ -169,24 +155,27 @@ export interface SubmitDepositResult {
     depositId: bigint;
 }
 
-// Bypasses SDK Wallet: used by negative tests that need malformed inputs and
-// by batch-flush which fires N submits without waiting for cm indexation.
 /**
  * Fresh Permit2 nonce, unique per call.
  *
- * Permit2 nonces are an unordered bitmap: any unused value works, but a
- * repeat reverts `InvalidNonce()`. Deriving one from `Date.now()` alone
- * collides whenever two deposits are signed inside the same millisecond —
- * which is exactly what `batch-flush` does when it fires N submits through
- * `Promise.all`, so it failed only sometimes. The counter makes it
- * deterministic; the timestamp seed keeps separate runs against the same
- * anvil from reusing each other's slots.
+ * Permit2 nonces are an unordered bitmap: any unused value works, but a repeat
+ * reverts `InvalidNonce()`. Deriving one from `Date.now()` alone collides
+ * whenever two deposits are signed inside the same millisecond, which is what
+ * `batch-flush` does when it fires N submits through `Promise.all`. The counter
+ * makes it deterministic; the timestamp seed keeps separate runs against the
+ * same anvil from reusing each other's slots.
  */
 let permit2Nonce = BigInt(Date.now()) << 8n;
 function nextPermit2Nonce(): bigint {
     return permit2Nonce++;
 }
 
+/**
+ * Submit a deposit built by `buildDeposit`, bypassing the SDK wallet.
+ *
+ * Used by negative tests that need malformed inputs, and by `batch-flush`,
+ * which fires N submits without waiting for commitment indexation.
+ */
 export async function submitDepositDirect(args: {
     payer: ethers.Signer;
     deposit: DepositRequest;
@@ -203,8 +192,8 @@ export async function submitDepositDirect(args: {
     const piHash = computePiHash(deposit, aux, feeAux);
     const nonce = nextPermit2Nonce();
     const deadline = args.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 3600);
-    // `signPermit2Witness` takes a viem-shaped `EthSigner`. Use the shared
-    // PAYER signer (memoised); tx broadcast still goes through the ethers
+    // `signPermit2Witness` takes a viem-shaped `EthSigner`, so the memoised
+    // PAYER signer is used here. Broadcast still goes through the ethers
     // `payer` below.
     const sig = await signPermit2Witness({
         signer: payerEthSigner(),
@@ -291,31 +280,14 @@ export async function waitForBatchFlushTx(args: {
     }, { label: "batch flush tx", timeoutMs: args.timeoutMs ?? TIMEOUT.BATCH_FLUSH_MS });
 }
 
-// SDK re-exports — kept here so tests import everything from `./harness`.
-// 0.11 split the root export into per-area subpaths; these are grouped by the
-// subpath each symbol now lives in.
-export { assetId, circuitAmount, TRANSACT_3X3 } from "@lelantos-org/sdk";
+// SDK re-exports, so tests import everything from `./harness`.
 export { buildDeposit } from "@lelantos-org/sdk/bundle";
-export { buildNoteCommitment, type Field } from "@lelantos-org/sdk/crypto";
-export type { Note } from "@lelantos-org/sdk/notes";
-export type { SpendableCachedNote } from "@lelantos-org/sdk/circuit";
-export {
-    DepositAdapterError,
-    InsufficientCoverError,
-    NetworkError,
-    NetworkNotDeployedError,
-    PermitRejectedError,
-    ProverError,
-    SelectionError,
-    TxMiningError,
-    WalletConfigError,
-    WalletError,
-    type WalletErrorCode,
-} from "@lelantos-org/sdk/errors";
+export { WalletError } from "@lelantos-org/sdk/errors";
 
-// Local re-exports. Tests should be able to get everything they need from
-// this module plus `./fixture.js`, so anything a test reaches for belongs here.
-export { MASP_ABI, MASP_DEPOSIT_ABI, MOCK_ERC20_ABI, SWAP_WRAPPER_ABI } from "./protocol/abi.js";
+// Local re-exports. A test should need nothing beyond this module and
+// `./fixture.js`.
+export { MASP_ABI, MOCK_ERC20_ABI, SWAP_WRAPPER_ABI } from "./protocol/abi.js";
+export { parseContractLogs } from "./protocol/logs.js";
 export {
     amt,
     baseAmt,
@@ -327,32 +299,25 @@ export {
     withFee,
 } from "./protocol/amounts.js";
 export { ASSET, ASSETS, scaleFor } from "./protocol/assets.js";
-export { REVERT } from "./protocol/reverts.js";
-export { N_IN, N_OUT } from "./protocol/shape.js";
+export { errorText, REVERT } from "./protocol/reverts.js";
+export { N_OUT } from "./protocol/shape.js";
 export { DEAD_ADDRESS } from "./chain/well-known.js";
-export { PROVER_PATHS } from "./testkit/prover.js";
-export { LIST_LIMIT, POLL, type PollOpts, SYNC_LIMIT, TEST_TIMEOUT, TIMEOUT } from "./testkit/timeouts.js";
-export { ExplorerClient } from "./explorer-client.js";
+export { SYNC_LIMIT, TEST_TIMEOUT } from "./testkit/timeouts.js";
 export {
-    accruedFee, type Erc20Helpers, expectBalanceDeltas,
-    makeWallet, noteFor, padOutputs, recipientCommitments, rngForOutput, setupErc20, setupWeth,
-    snapshotBalances, type CircuitWallet, trackedAddrs, waitForAdvance, waitForCm,
+    accruedFee, type CircuitWallet, type Erc20Helpers, expectBalanceDeltas,
+    makeWallet, rngForOutput, snapshotBalances, trackedAddrs, waitForCm,
 } from "./scenario.js";
-// NB: `fixture.ts` is deliberately *not* re-exported here — it imports this
-// module, and routing it back through the barrel would make the cycle load-
-// order sensitive. Tests import it directly from `../src/fixture.js`.
-export { payerEthSigner } from "./signers.js";
-export { errorText } from "./protocol/reverts.js";
 export { expectRevert } from "./testkit/expect-revert.js";
 export { feePaid } from "./testkit/spend-fee.js";
 export {
-    type DepositFeeArg,
-    type FeeRng,
     depositFeePaid,
     quoteDepositFee,
     relayerFeeNote,
     unflushableFee,
 } from "./testkit/deposit-fee.js";
-export { cmToHex, counter, pollUntil } from "./utils.js";
+export { counter } from "./utils.js";
 export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";
 export { createTestWallet, TEST_NSK } from "./wallet.js";
+// `fixture.ts` is not re-exported here: it imports this module, and routing it
+// back through the barrel would make the cycle load-order sensitive. Tests
+// import it directly from `../src/fixture.js`.

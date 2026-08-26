@@ -26,7 +26,7 @@ const WITHDRAW_WETH = amt(8n);
 
 const SHIELD_FEE = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const UNSHIELD_FEE = feeFor(WITHDRAW_WETH, ASSET_WETH);
-// SDK fee rounds to 0 at this magnitude, so publicOut == WITHDRAW_WETH.
+// The SDK fee floors to 0 at this magnitude, so publicOut == WITHDRAW_WETH.
 const NET_WITHDRAW = baseAmt(WITHDRAW_WETH, ASSET_WETH) - UNSHIELD_FEE;
 
 interface Snapshot {
@@ -39,9 +39,9 @@ describe("withdraw native ETH (WETH unwrap)", () => {
     let alice: SdkWallet;
     let weth: Erc20Helpers;
 
-    /// WETH balances for the tracked accounts plus the recipient's raw ETH —
-    /// the whole point of this path is that value arrives as coin, not token,
-    /// so both sides have to be observed in the same snapshot.
+    /// WETH balances for the tracked accounts plus the recipient's raw ETH.
+    /// This path delivers value as coin rather than token, so both have to be
+    /// observed in the same snapshot.
     async function snap(): Promise<Snapshot> {
         return {
             weth: await snapshotBalances(weth),
@@ -95,14 +95,14 @@ describe("withdraw native ETH (WETH unwrap)", () => {
         expect(after.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);
         expect(after.weth.recipient - before.weth.recipient, "arrives as coin, not token").toBe(0n);
         expect(before.weth.masp - after.weth.masp).toBe(NET_WITHDRAW);
-        // The relayer's fee stays in the pool as a note, so it never appears
-        // in the public deltas above — only in what alice has left.
+        // The relayer's fee stays in the pool as a note, so it appears only in
+        // what alice has left, never in the public deltas above.
         expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
     }, TEST_TIMEOUT.SPEND);
 
     it("MASP accrues shield + unshield fees in WETH", async () => {
         await withdrawn();
-        // Lower bound: cumulative counter on a shared MASP.
+        // Lower bound: the counter is cumulative on a shared MASP.
         expect(await accruedFee(h.provider, env.token1))
             .toBeGreaterThanOrEqual(SHIELD_FEE + UNSHIELD_FEE);
     }, TEST_TIMEOUT.SPEND);

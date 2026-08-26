@@ -1,21 +1,19 @@
 // Nonce plumbing for the payer account.
 //
 // The payer key is driven by two independent stacks: `h.payer` (ethers, for
-// direct contract calls) and the SDK's viem `PrivateKeySigner` (deposit /
-// transact / swap). Neither may cache nonces locally — they would diverge from
-// each other — so both ask anvil for the account's `pending` count on every
-// send. Two sends whose windows overlap therefore read the same value, and the
-// loser comes back `NONCE_EXPIRED` ("nonce too low"), which is the CI flake
-// this file exists to remove.
+// direct contract calls) and the SDK's viem `PrivateKeySigner` (deposit,
+// transact, swap). Neither may cache nonces locally, or the two diverge, so
+// both ask anvil for the account's `pending` count on every send. Two sends
+// whose windows overlap then read the same value and the loser fails with
+// `NONCE_EXPIRED` ("nonce too low").
 //
-// Three things close the window:
+// Three things close that window:
 //   * `providerOpts` — ethers memoises a `_perform` result for 250ms, which
 //     covers `eth_getTransactionCount`. Two sends inside that window get the
-//     *same cached* nonce even when the first has already been mined.
-//   * `SerialWallet` — queues the ethers-side sends so they never overlap
-//     each other.
-//   * the retry inside it — covers the half it cannot see, an SDK send landing
-//     between our nonce read and our submit, by re-populating and resending.
+//     same cached nonce even when the first has already been mined.
+//   * `SerialWallet` — queues the ethers-side sends so they do not overlap.
+//   * its retry — covers the case it cannot see, an SDK send landing between
+//     the nonce read and the submit, by repopulating and resending.
 
 import { ethers } from "ethers";
 
@@ -28,8 +26,8 @@ const RETRY_DELAY_MS = 200;
  * Provider options every ethers provider in the suite is built with.
  *
  * `cacheTimeout: -1` disables the 250ms `_perform` cache. On a 1s-block anvil
- * shared by 12 files, a stale `getTransactionCount` is a wrong nonce, not a
- * saved round-trip.
+ * shared by every test file, a stale `getTransactionCount` is a wrong nonce,
+ * not a saved round-trip.
  */
 export const providerOpts: ethers.JsonRpcApiProviderOptions = { cacheTimeout: -1 };
 
@@ -63,9 +61,9 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
  * lost nonce race.
  *
  * A caller that sets `nonce` explicitly (`ethers.NonceManager`, which
- * `batch-flush` uses to fan out N deposits) opts out of the retry: resending
- * with a fresh nonce would silently reorder its batch. It still goes through
- * the queue, which only orders the submits.
+ * `batch-flush` uses to fan out N deposits) opts out of the retry, because
+ * resending with a fresh nonce would reorder its batch. Such sends still pass
+ * through the queue, which only orders the submits.
  */
 export class SerialWallet extends ethers.Wallet {
     override async sendTransaction(
@@ -89,16 +87,16 @@ export class SerialWallet extends ethers.Wallet {
  * Block until the account has nothing in flight.
  *
  * Called once per file: a tx left in the pool by the previous file is a nonce
- * the next `pending` read has to account for, and anvil's pending view lags
- * the pool briefly after a block. Equal `pending` and `latest` counts means
- * the pool is drained for this account and the next send can trust its read.
+ * the next `pending` read has to account for, and anvil's pending view lags the
+ * pool briefly after a block. Equal `pending` and `latest` counts mean the pool
+ * is drained for this account and the next send can trust its read.
  */
 export async function settleNonce(
     provider: ethers.JsonRpcProvider,
     address: string,
 ): Promise<number> {
-    // Boxed: `pollUntil` retries on any falsy value, and nonce 0 is a real
-    // answer on a fresh chain.
+    // Boxed because `pollUntil` retries on any falsy value, and nonce 0 is a
+    // valid answer on a fresh chain.
     const { nonce } = await pollUntil(async () => {
         const [pending, latest] = await Promise.all([
             provider.getTransactionCount(address, "pending"),

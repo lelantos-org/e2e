@@ -27,8 +27,10 @@ import { type FeeTokenSpec, renderRelayerConfig } from "./infra/relayer-config.j
 import { RELAYER_FEE_ADDRESS, RELAYER_FEE_IVK } from "./protocol/shielded-fee.js";
 import type { SwapAddresses } from "./infra/addresses.js";
 
-// `configFile` resolves against CONFIG_DIR (config file bind mount).
-// `hostPath` is an absolute host path (used for directory mounts like circuits).
+// Container specs for every backend service, plus the runner that starts one.
+//
+// `configFile` resolves against `CONFIG_DIR`; `hostPath` is an absolute host
+// path, used for directory mounts such as the circuits.
 export type MountSpec =
     | { configFile: string; target: string }
     | { hostPath: string; target: string };
@@ -54,7 +56,7 @@ export const POSTGRES: ServiceSpec = {
         POSTGRES_DB: "postgres",
     },
     port: PORT.POSTGRES,
-    // postgres logs the ready line during init and again when fully online.
+    // postgres logs the ready line during init and again once fully online.
     wait: Wait.forLogMessage(/database system is ready to accept connections/, 2),
 };
 
@@ -89,9 +91,9 @@ export interface BackendServices {
 /**
  * Static price feed for the relayer's fee quotes.
  *
- * nginx over `config/oracle`, whose tree is laid out as the paths
- * `CoinbaseOracle` requests. `resp.json()` does not check content-type, so
- * files served as `application/octet-stream` parse fine.
+ * nginx over `config/oracle`, whose tree mirrors the paths `CoinbaseOracle`
+ * requests. `resp.json()` does not check content-type, so files served as
+ * `application/octet-stream` parse correctly.
  */
 export const ORACLE: ServiceSpec = {
     image: "nginx:alpine",
@@ -130,7 +132,8 @@ export function backendSpecs({
                 [`INGESTER_CHAIN_${CHAIN_ID}_START_BLOCK`]: "0",
             },
             mounts: [{ configFile: "ingester.toml", target: "/etc/ingester.toml" }],
-            // Owns schema migrations; concurrent backends race CREATE TYPE if started early.
+            // Owns schema migrations. Backends started before this race it on
+            // CREATE TYPE.
             wait: Wait.forLogMessage(/migrations complete/i),
         },
         fmdIndexer: {
@@ -138,9 +141,9 @@ export function backendSpecs({
             alias: "fmd-indexer",
             env: BASE_RUST_ENV,
             // Exact line from `crates/fmd-indexer/src/main.rs`, emitted once
-            // the config is loaded and the DB pool is built. Not `/ready/i` —
-            // that matched any startup line containing the word and could
-            // declare the container up before it had a database connection.
+            // the config is loaded and the DB pool is built. Not `/ready/i`,
+            // which matches any startup line containing the word and can
+            // declare the container up before it has a database connection.
             wait: Wait.forLogMessage(/fmd-indexer ready/),
         },
         explorerIndexer: {
@@ -182,27 +185,27 @@ export function backendSpecs({
                 ...(nativeAdapter
                     ? { [`RELAYER_CHAIN_${CHAIN_ID}_NATIVE_ADAPTER_ADDRESS`]: nativeAdapter }
                     : {}),
-                // Turning these on makes the relayer charge for spends *and*
-                // deposits. Derived from one nsk so the address and the key
-                // cannot disagree — the relayer refuses to boot if they do.
+                // Setting these makes the relayer charge for spends and
+                // deposits. Both derive from one nsk, so the address and the
+                // key cannot disagree; the relayer refuses to boot if they do.
                 [`RELAYER_CHAIN_${CHAIN_ID}_SHIELDED_FEE_ADDRESS`]: RELAYER_FEE_ADDRESS,
                 [`RELAYER_CHAIN_${CHAIN_ID}_SHIELDED_FEE_IVK`]: RELAYER_FEE_IVK,
                 RUST_LOG: "info",
             },
             mounts: [
                 // Rendered, not the committed file: `accepted_fee_tokens`
-                // carries addresses that only exist after the forge deploy.
+                // carries addresses that exist only after the forge deploy.
                 { hostPath: relayerConfigPath, target: "/etc/relayer.toml" },
                 { hostPath: CIRCUITS_DIR, target: "/circuits" },
             ],
             port: PORT.RELAYER,
             // `crates/relayer/src/main.rs` logs this only after the ark-circom
-            // prover has finished loading wasm/r1cs/zkey. Strictly stronger
-            // than `forListeningPorts()`: a relayer whose prover is still
-            // warming accepts connections but stalls the first submit, which
-            // surfaces much later as an unexplained `awaitOwn` timeout.
+            // prover has loaded wasm/r1cs/zkey. Stronger than
+            // `forListeningPorts()`: a relayer whose prover is still warming
+            // accepts connections but stalls the first submit, which surfaces
+            // much later as an unexplained `awaitOwn` timeout.
             wait: Wait.forLogMessage(/relayer listening/),
-            // Prover load is slow on CI.
+            // Prover load is slow in CI.
             startupMs: 90_000,
         },
     };
@@ -251,7 +254,7 @@ export async function runService(
         );
     }
 
-    // Container is reaped on failure; persist logs so traces survive.
+    // The container is reaped on failure, so logs are persisted to disk.
     const dir = logDir();
     mkdirSync(dir, { recursive: true });
     const sink = createWriteStream(resolve(dir, `${spec.alias}.log`), { flags: "a" });

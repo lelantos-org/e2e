@@ -3,8 +3,8 @@
 # @lelantos-org/circuits GitHub release into ./circuits/. The relayer container
 # bind-mounts this directory at /circuits and reads it at startup.
 #
-# Version is taken from node_modules/@lelantos-org/circuits/package.json so it
-# always matches the npm-installed SDK circuit set. Override with $VERSION.
+# The version comes from node_modules/@lelantos-org/circuits/package.json so it
+# matches the npm-installed circuit set. Override with $VERSION.
 
 set -euo pipefail
 

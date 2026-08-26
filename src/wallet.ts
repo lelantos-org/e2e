@@ -20,8 +20,8 @@ export interface CreateWalletOpts {
     noteStore?: InMemoryNoteStore;
 }
 
-// Each test file uses a distinct prefix; files share one anvil + FMD index,
-// so colliding NSKs leak notes across tests.
+// Each test file uses a distinct prefix. Files share one anvil and one FMD
+// index, so colliding NSKs leak notes across tests.
 export const TEST_NSK = {
     fullFlow:       { alice: 0xff_a1ce_a11c0n, bob: 0xff_b0b_b0b00n },
     doubleSpend:    { alice: 0xdd_a1ce_a11c0n, bob: 0xdd_b0b_b0b00n },
@@ -38,13 +38,12 @@ export const TEST_NSK = {
 } as const;
 
 /**
- * Wallets built by `createTestWallet` that have not been disposed yet.
+ * Wallets built by `createTestWallet` and not yet disposed.
  *
- * SDK 0.18 gave `Wallet` a `dispose()`, and the whole suite runs in one fork
- * (`singleFork`, see `vitest.config.ts`), so every wallet's scanner and prover
- * stay resident for the rest of the run unless something releases them. Test
- * files build wallets in `beforeAll` and ad hoc inside `it`s, so the registry
- * tracks them centrally and `src/test-setup.ts` drains it after each file.
+ * The suite runs in one fork (`singleFork`, see `vitest.config.ts`), so every
+ * wallet's scanner and prover stay resident for the rest of the run unless
+ * released. Test files build wallets in `beforeAll` and ad hoc inside `it`s, so
+ * they are tracked here and `src/test-setup.ts` drains the set after each file.
  */
 const live = new Set<Wallet>();
 
@@ -74,8 +73,8 @@ export async function createTestWallet(
         signer,
         maspAddress: env.maspAddress,
         permit2Address: env.permit2Address,
-        // Enables `asEth` deposits and `withdrawEth`; both are bound to this
-        // address rather than the pool.
+        // Enables `asEth` deposits and `withdrawEth`. Both bind to this
+        // address rather than to the pool.
         nativeAdapterAddress: env.nativeAdapterAddress,
         chainId: env.chainId,
     });

@@ -15,9 +15,9 @@ describe("negative: zero-value deposit", () => {
     let alice: SdkWallet;
 
     beforeAll(async () => {
-        // The call never reaches the chain, but fund anyway so a regression
-        // that *does* let it through fails on the assertion rather than on an
-        // unrelated "insufficient balance".
+        // The call never reaches the chain, but funding anyway means a
+        // regression that lets it through fails on the assertion rather than
+        // on an unrelated "insufficient balance".
         ({ w: { alice } } = await setupFile({
             nsks: TEST_NSK.negZeroValue,
             fund: [{ asset: ASSET, amount: withFee(10n) }],

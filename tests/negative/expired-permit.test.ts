@@ -1,4 +1,5 @@
-// SDK Wallet clamps deadline to `now+3600`; use direct-submit to backdate.
+// `Wallet.deposit` clamps the Permit2 deadline to `now + 3600`, so the
+// backdated deadline is submitted through the direct path instead.
 
 import { beforeAll, describe, it } from "vitest";
 
@@ -20,7 +21,8 @@ import {
     withFee,
 } from "../../src/harness.js";
 import { setupFile } from "../../src/fixture.js";
-import { expiredPermitDeadline } from "../../src/negative.js";
+
+const expiredPermitDeadline = () => BigInt(Math.floor(Date.now() / 1000) - 60);
 
 const { alice: NSK } = TEST_NSK.negExpired;
 
@@ -52,7 +54,7 @@ describe("negative: expired Permit2 deadline", () => {
                 aux: built.aux,
                 feeAux: built.feeAux,
                 tokenAddr: env.token2,
-                // Correctly sized, so the only thing wrong is the deadline.
+                // Correctly sized, so the deadline is the only fault.
                 maxTotal: withFee(50n),
                 deadline: expiredPermitDeadline(),
             }),

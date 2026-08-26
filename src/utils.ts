@@ -1,12 +1,11 @@
 import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk/crypto";
 
-export function fieldToHex32(v: Field): string {
+/** A field element as a 0x-prefixed 32-byte hex string. */
+export function cmToHex(v: Field): string {
     return "0x" + v.toString(16).padStart(64, "0");
 }
 
-export const cmToHex = fieldToHex32;
-
-// LCG scalar source in 𝔽_subgroup; same seed → same sequence across runs.
+// LCG scalar source in 𝔽_subgroup; same seed yields the same sequence.
 export function counter(seed: bigint): () => Field {
     let n = seed;
     return () => {
@@ -27,11 +26,15 @@ export function waitForSignal(): Promise<void> {
     });
 }
 
-// Predicate exceptions are swallowed while polling: warm-up reads (connection
-// refused, not-yet-indexed) are expected to fail until the service is ready.
-// The *last* one is kept and reported on timeout — without it a 120s timeout
-// says only "timed out", which is indistinguishable between "the service never
-// came up", "the row never landed" and "the predicate itself has a bug".
+/**
+ * Poll `predicate` until it returns a truthy value, or fail with a message
+ * naming the last error.
+ *
+ * Predicate exceptions are swallowed while polling: warm-up reads (connection
+ * refused, not yet indexed) are expected to fail until the service is ready.
+ * The last one is reported on timeout, which distinguishes "the service never
+ * came up" from "the row never landed" and from a bug in the predicate.
+ */
 export async function pollUntil<T>(
     predicate: () => Promise<T | null | undefined>,
     opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {},

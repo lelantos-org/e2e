@@ -18,10 +18,9 @@ const DEPOSIT_A = amt(30n);
 const DEPOSIT_B = amt(70n);
 const TOTAL = amt(DEPOSIT_A + DEPOSIT_B);
 /**
- * More than either note alone, so the selector has to consume both — which is
- * the whole point of this file — but below `TOTAL` by more than the relayer's
- * fee, because a spend must also fund the fee note and can never send the
- * wallet's entire balance.
+ * More than either note alone, so the selector has to consume both, but below
+ * `TOTAL` by more than the relayer's fee, since the spend must also fund the
+ * fee note.
  */
 const SEND_AMT = amt(DEPOSIT_B + 25n);
 
@@ -52,7 +51,7 @@ describe("two-input merge transfer", () => {
 
     it("transfer consumes BOTH inputs, lands a single note for bob", async () => {
         await funded();
-        // Deltas, not absolutes: the MASP is shared across all test files.
+        // Deltas, not absolutes: the MASP is shared across test files.
         const before = (await h.masp.committedCount()) as bigint;
         const inputNotesBefore = alice.notes({ asset: ASSET, spent: false });
         expect(inputNotesBefore.length).toBe(2);

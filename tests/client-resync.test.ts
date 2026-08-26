@@ -34,7 +34,7 @@ describe("cold-client resync", () => {
 
     /// The history a cold client has to reconstruct: interleaved deposits and
     /// transfers, so bob's two notes are separated by an unrelated deposit and
-    /// are not simply the last two leaves in the tree.
+    /// are not the last two leaves in the tree.
     const activity = once(async () => {
         const d1 = await alice.deposit({ amount: DEPOSIT_1, asset: ASSET });
         await awaitOwn(alice, d1);
@@ -54,8 +54,8 @@ describe("cold-client resync", () => {
         await awaitRecipient(bob, t2);
         const afterT2 = alice.balance(ASSET);
 
-        // Each transfer also funds a note paying the relayer, out of alice's
-        // own inputs — so her running balance drops by more than she sent.
+        // Each transfer also funds a note paying the relayer out of alice's own
+        // inputs, so her running balance drops by more than she sent.
         return { afterD1, afterT1, afterD2, afterT2, fee1: feePaid(t1), fee2: feePaid(t2) };
     });
 

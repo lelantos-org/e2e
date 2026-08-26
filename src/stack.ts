@@ -1,3 +1,6 @@
+// Container lifecycle for the whole stack: network, postgres, anvil, the forge
+// deploy, and the backend services that depend on its addresses.
+
 import { execFile, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -43,8 +46,9 @@ export class Stack {
         this.postgres = await runService(POSTGRES, this.network);
         this.anvil = await runService(ANVIL, this.network);
 
-        // DeployPermit2 in DeployTest.s.sol uses vm.etch which is dropped under
-        // --broadcast; MASP ctor reverts ZeroPermit2() without this pre-deploy.
+        // `DeployPermit2` in DeployTest.s.sol uses `vm.etch`, which is dropped
+        // under `--broadcast`. Without this pre-deploy the MASP constructor
+        // reverts with `ZeroPermit2()`.
         await preDeployPermit2(this.rpcUrl());
 
         return { rpc: this.rpcUrl() };
@@ -55,16 +59,17 @@ export class Stack {
         const baseEnv: Record<string, string> = {
             ...process.env as Record<string, string>,
             MASP_FEE_BPS: FEE_BPS.toString(),
-            // up() already pre-deployed Permit2; skip DeployTest's vm.getCode fallback.
+            // Permit2 is pre-deployed by `up()`; skip DeployTest's `vm.getCode`
+            // fallback.
             PERMIT2: CANONICAL_PERMIT2_ADDRESS,
         };
 
         const coreOut = await runForgeScript("DeployTest", rpcUrl, baseEnv);
         this.addresses = parseDeployOutput(coreOut);
 
-        // Run DeployTestSwap after core; reads MASP/PERMIT2/TOKEN_* from env.
-        // Skip when E2E_SKIP_SWAP=1 (lets non-swap suites run without the
-        // mock UniV3 stack).
+        // DeployTestSwap runs after the core deploy and reads
+        // MASP/PERMIT2/TOKEN_* from env. E2E_SKIP_SWAP=1 skips it, so non-swap
+        // suites can run without the mock UniV3 stack.
         if (process.env.E2E_SKIP_SWAP !== "1") {
             const swapEnv: Record<string, string> = {
                 ...baseEnv,
@@ -81,15 +86,15 @@ export class Stack {
         return this.addresses;
     }
 
-    // Ingester runs alone first (owns schema migrations); the rest start in parallel.
+    // The ingester runs alone first because it owns schema migrations; the
+    // rest start in parallel.
     async upBackend(addrs: Addresses): Promise<Urls> {
         const network = this.network;
         if (!network) throw new Error("upBackend: call up() first");
-        // Every registered asset is payable, so a test can pay the fee in
-        // whatever it is already moving — the wallet builds one spend in one
-        // asset and cannot pay in another.
-        // `id` is the join to the deploy and is not part of the relayer's
-        // config, so it is destructured away rather than passed and ignored.
+        // Every registered asset is payable, so a test can pay the fee in the
+        // asset it is already moving: a spend covers one asset and cannot pay
+        // in another. `id` is the join to the deploy and is not part of the
+        // relayer's config, so it is destructured away.
         const feeTokens: FeeTokenSpec[] = FEE_TOKENS.map(({ id, ...token }) => ({
             ...token,
             address: requireToken(addrs.tokens, id),
@@ -107,7 +112,7 @@ export class Stack {
             return container;
         };
 
-        // Before the relayer: it resolves every fee token's oracle pair at
+        // Before the relayer, which resolves every fee token's oracle pair at
         // boot and refuses to start if one is unreachable.
         await start(ORACLE);
 
@@ -190,12 +195,10 @@ function errText(e: unknown): string {
 
 /**
  * Final `docker logs` dump, written alongside the per-service streams that
- * `runService` opens (same `logDir()`, so CI collects both).
+ * `runService` opens, under the same `logDir()` so CI collects both.
  *
  * Best-effort: teardown must finish even when a container is already gone, so
- * every failure is reported and swallowed rather than thrown. Reported, not
- * silenced — a stack that tears down without leaving logs is exactly the case
- * where you need to know why.
+ * failures are reported and swallowed rather than thrown.
  */
 function dumpBackendLogs(backends: readonly RunningService[]): void {
     const dir = logDir();
@@ -208,10 +211,10 @@ function dumpBackendLogs(backends: readonly RunningService[]): void {
 
     for (const { alias, container } of backends) {
         try {
-            // spawnSync, not execFileSync: a non-zero exit here is normal (the
-            // container may already be gone) and must not throw away the output
-            // we did get. Both streams are kept — services log to stderr, so
-            // stdout alone would drop most of what makes the dump worth having.
+            // spawnSync, not execFileSync: a non-zero exit is normal here (the
+            // container may already be gone) and must not discard the output
+            // already captured. Both streams are kept, since services log to
+            // stderr.
             const r = spawnSync("docker", ["logs", container.getId()], {
                 maxBuffer: 64 * 1024 * 1024,
             });
@@ -248,7 +251,7 @@ async function runForgeScript(
     return stdout;
 }
 
-// forge colourises its output; the address regexes below run on plain text.
+// forge colourises its output; the address patterns below run on plain text.
 function stripAnsi(s: string): string {
     return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
@@ -281,8 +284,9 @@ function requireSwapAddresses(stripped: string, what: string): SwapAddresses {
     return readSwapAddresses(found);
 }
 
-// Relayer mounts <e2e>/circuits/ at /circuits and reads tree_update_batch.{wasm,r1cs,_final.zkey}
-// at startup. The fetch script is idempotent (skips if .version matches).
+// The relayer mounts <e2e>/circuits/ at /circuits and reads
+// tree_update_batch.{wasm,r1cs,_final.zkey} at startup. The fetch script is
+// idempotent and skips when .version matches.
 async function ensureCircuits(): Promise<void> {
     log("fetching circuits…");
     await execFileAsync("scripts/fetch-circuits.sh", [], { cwd: E2E_DIR });
@@ -304,9 +308,10 @@ function parseDeployOutput(stdout: string): Addresses {
         if (m) tokens[Number(m[1])] = v;
     }
 
-    // The core script emits swap addresses only when it deployed them. All four
-    // or none — a partial set means the script changed shape and the caller
-    // would otherwise get an object with `undefined` fields typed as `string`.
+    // The core script emits swap addresses only when it deployed them: all
+    // four or none. A partial set means the script changed shape, and the
+    // caller would otherwise get an object with `undefined` fields typed as
+    // `string`.
     const swapPresent = SWAP_KEYS.filter((k) => found.has(k));
     if (swapPresent.length !== 0 && swapPresent.length !== SWAP_KEYS.length) {
         throw new Error(`deploy: partial swap addresses in forge output:\n${stripped}`);
