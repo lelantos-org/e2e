@@ -9,6 +9,9 @@ export interface SwapAddresses {
     univ3Quoter: string;
     univ3Adapter: string;
     mockSwapRouter: string;
+    univ4Quoter: string;
+    univ4Adapter: string;
+    mockUniversalRouter: string;
     wrapper: string;
 }
 

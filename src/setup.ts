@@ -112,6 +112,8 @@ function publishEnv(e: StackEnv): void {
     if (e.swap) {
         process.env.UNIV3_QUOTER_ADDRESS = e.swap.univ3Quoter;
         process.env.UNIV3_ADAPTER_ADDRESS = e.swap.univ3Adapter;
+    process.env.UNIV4_QUOTER_ADDRESS = e.swap.univ4Quoter;
+    process.env.UNIV4_ADAPTER_ADDRESS = e.swap.univ4Adapter;
         process.env.MOCK_SWAP_ROUTER_ADDRESS = e.swap.mockSwapRouter;
         process.env.SWAP_WRAPPER_ADDRESS = e.swap.wrapper;
     }

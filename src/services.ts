@@ -220,6 +220,8 @@ export function backendSpecs({
                 [`METAQUOTER_CHAIN_${CHAIN_ID}_RPC_URL`]: ANVIL_RPC_INTERNAL,
                 [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV3_QUOTER`]: swap.univ3Quoter,
                 [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV3_ADAPTER`]: swap.univ3Adapter,
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV4_QUOTER`]: swap.univ4Quoter,
+                [`METAQUOTER_CHAIN_${CHAIN_ID}_UNIV4_ADAPTER`]: swap.univ4Adapter,
                 [`METAQUOTER_CHAIN_${CHAIN_ID}_MASP_FEE_BPS`]: FEE_BPS.toString(),
             },
             mounts: [{ configFile: "metaquoter.toml", target: "/etc/metaquoter.toml" }],

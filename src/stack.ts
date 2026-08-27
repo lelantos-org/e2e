@@ -264,18 +264,29 @@ function parseAddressPairs(stripped: string): Map<string, string> {
     return found;
 }
 
-const SWAP_KEYS = ["UNIV3_QUOTER", "UNIV3_ADAPTER", "MOCK_SWAP_ROUTER", "SWAP_WRAPPER"] as const;
+const SWAP_KEYS = [
+    "UNIV3_QUOTER",
+    "UNIV3_ADAPTER",
+    "MOCK_SWAP_ROUTER",
+    "UNIV4_QUOTER",
+    "UNIV4_ADAPTER",
+    "MOCK_UNIVERSAL_ROUTER",
+    "SWAP_WRAPPER",
+] as const;
 
 function readSwapAddresses(found: Map<string, string>): SwapAddresses {
     return {
         univ3Quoter: found.get("UNIV3_QUOTER")!,
         univ3Adapter: found.get("UNIV3_ADAPTER")!,
         mockSwapRouter: found.get("MOCK_SWAP_ROUTER")!,
+        univ4Quoter: found.get("UNIV4_QUOTER")!,
+        univ4Adapter: found.get("UNIV4_ADAPTER")!,
+        mockUniversalRouter: found.get("MOCK_UNIVERSAL_ROUTER")!,
         wrapper: found.get("SWAP_WRAPPER")!,
     };
 }
 
-/** All four swap addresses, or throw naming the first missing one. */
+/** Every swap address, or throw naming the first missing one. */
 function requireSwapAddresses(stripped: string, what: string): SwapAddresses {
     const found = parseAddressPairs(stripped);
     for (const k of SWAP_KEYS) {

@@ -54,6 +54,8 @@ export const env = {
         univ3Quoter: () => evmAddress(reqSwap(() => opt("UNIV3_QUOTER_ADDRESS"), "UNIV3_QUOTER_ADDRESS")),
         univ3Adapter: () => evmAddress(reqSwap(() => opt("UNIV3_ADAPTER_ADDRESS"), "UNIV3_ADAPTER_ADDRESS")),
         mockSwapRouter: () => evmAddress(reqSwap(() => opt("MOCK_SWAP_ROUTER_ADDRESS"), "MOCK_SWAP_ROUTER_ADDRESS")),
+        univ4Quoter: () => evmAddress(reqSwap(() => opt("UNIV4_QUOTER_ADDRESS"), "UNIV4_QUOTER_ADDRESS")),
+        univ4Adapter: () => evmAddress(reqSwap(() => opt("UNIV4_ADAPTER_ADDRESS"), "UNIV4_ADAPTER_ADDRESS")),
         wrapper: () => evmAddress(reqSwap(() => opt("SWAP_WRAPPER_ADDRESS"), "SWAP_WRAPPER_ADDRESS")),
     },
 };
