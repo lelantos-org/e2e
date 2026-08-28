@@ -12,8 +12,8 @@ import {
     type Harness,
     TEST_NSK,
     TEST_TIMEOUT,
-    depositFeePaid,
-    feePaid,
+    expectRelayerPaid,
+    expectRelayerPaidOnDeposit,
     scaleFor,
     withFee,
 } from "../src/harness.js";
@@ -104,7 +104,9 @@ describe.skipIf(!env.nativeAdapterAddress)(
             const before = await snap();
             const r = await alice.deposit({ amount: DEPOSIT, asset: ASSET_WETH, asEth: true });
             await awaitOwn(alice, r);
-            const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+            // The adapter path must build the same two leaves as the ERC-20
+            // one, so the relayer has to be able to open the second here too.
+            const relayerFee = await expectRelayerPaidOnDeposit(h.provider, r.txHash, ASSET_WETH);
             return { before, relayerFee, after: await snap(), r };
         });
 
@@ -156,7 +158,8 @@ describe.skipIf(!env.nativeAdapterAddress)(
             await awaitOwn(alice, r);
             // The unshield fee leaves the pool and the relayer's fee stays in
             // it as a note. Both come out of alice's balance.
-            expect(before - alice.balance(ASSET_WETH)).toBe(WITHDRAW_DEBIT + feePaid(r));
+            const fee = await expectRelayerPaid(r, ASSET_WETH);
+            expect(before - alice.balance(ASSET_WETH)).toBe(WITHDRAW_DEBIT + fee);
         }, TEST_TIMEOUT.SPEND);
     },
 );

@@ -4,7 +4,7 @@ import {
     amt,
     ASSET,
     awaitOwn,
-    feePaid,
+    expectRelayerPaid,
     awaitRecipient,
     type Harness,
     N_OUT,
@@ -57,7 +57,8 @@ describe("two-input merge transfer", () => {
         expect(inputNotesBefore.length).toBe(2);
 
         const r = await alice.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET });
-        const fee = feePaid(r);
+        // A two-input spend funds one fee note, not one per input.
+        const fee = await expectRelayerPaid(r, ASSET);
         // Both inputs are consumed and alice keeps the remainder, so there is
         // change to wait for on her side as well as bob's.
         await awaitOwn(alice, r);

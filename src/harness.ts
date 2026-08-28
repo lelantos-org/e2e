@@ -311,11 +311,17 @@ export { expectRevert } from "./testkit/expect-revert.js";
 export { cancelDepositAfterDelay } from "./testkit/cancel-deposit.js";
 export { feePaid } from "./testkit/spend-fee.js";
 export {
-    depositFeePaid,
+    depositFeeLeaf,
     quoteDepositFee,
     relayerFeeNote,
     unflushableFee,
 } from "./testkit/deposit-fee.js";
+export {
+    expectRelayerPaid,
+    expectRelayerPaidOnCommitment,
+    expectRelayerPaidOnDeposit,
+    relayerFeeWallet,
+} from "./testkit/relayer-fee.js";
 export { counter } from "./utils.js";
 export { awaitBalance, awaitOwn, awaitRecipient } from "./wait.js";
 export { createTestWallet, TEST_NSK } from "./wallet.js";

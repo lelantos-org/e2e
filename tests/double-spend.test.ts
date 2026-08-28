@@ -5,8 +5,8 @@ import {
     ASSET,
     awaitOwn,
     createTestWallet,
+    expectRelayerPaid,
     expectRevert,
-    feePaid,
     REVERT,
     SYNC_LIMIT,
     TEST_NSK,
@@ -47,7 +47,9 @@ describe("double-spend rejection", () => {
         await funded();
         const r = await alice.transfer({ to: bob.address, amount: SEND_AMT, asset: ASSET });
         await awaitOwn(alice, r);
-        return { fee: feePaid(r) };
+        // Only the spend that lands pays: the replay below reverts before it
+        // can fund a second fee note.
+        return { fee: await expectRelayerPaid(r, ASSET) };
     });
 
     it("deposit funds alice's spendable note", async () => {

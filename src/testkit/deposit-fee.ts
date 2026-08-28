@@ -102,21 +102,28 @@ function feeNote(recipient: Recipient, value: bigint, { rng, auxRng }: FeeRng): 
     };
 }
 
+/** The fee leaf a deposit escrowed: what it is worth and which leaf it is. */
+export interface DepositFeeLeaf {
+    /** `feeIn`, in circuit units. Zero on a subsidised chain. */
+    value: bigint;
+    /** `feeCm`, the commitment the relayer must be able to recover. */
+    cm: string;
+}
+
 /**
- * The relayer fee a completed deposit escrowed, in circuit units.
+ * The fee leaf of a completed deposit, read from its `DepositEscrowed` log.
  *
- * Read from the deposit's own `DepositEscrowed` log rather than re-quoting the
- * relayer: the wallet priced the note at submit time, and a fresh quote a few
- * blocks later can differ because gas moves. The event is what the payer was
- * debited for.
- *
- * Zero on a subsidised chain, so callers can use it unconditionally.
+ * The log rather than a fresh relayer quote: the wallet priced the note at
+ * submit time, and a quote a few blocks later can differ because gas moves.
+ * The event is what the payer was actually debited for, and it carries the
+ * commitment alongside the amount, which is what lets the relayer side of the
+ * payment be checked (see `testkit/relayer-fee.ts`).
  */
-export async function depositFeePaid(
+export async function depositFeeLeaf(
     provider: ethers.Provider,
     maspAddress: string,
     txHash: string,
-): Promise<bigint> {
+): Promise<DepositFeeLeaf> {
     const receipt = await provider.getTransactionReceipt(txHash);
     if (receipt === null) throw new Error(`deposit ${txHash}: no receipt`);
     const masp = new ethers.Contract(maspAddress, MASP_DEPOSIT_ABI, provider);
@@ -130,5 +137,8 @@ export async function depositFeePaid(
                 "this helper assumes one deposit per transaction",
         );
     }
-    return BigInt(escrowed[0].args.feeIn as bigint);
+    return {
+        value: BigInt(escrowed[0].args.feeIn as bigint),
+        cm: escrowed[0].args.feeCm as string,
+    };
 }

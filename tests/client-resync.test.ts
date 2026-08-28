@@ -4,7 +4,7 @@ import {
     amt,
     ASSET,
     awaitOwn,
-    feePaid,
+    expectRelayerPaid,
     awaitRecipient,
     createTestWallet,
     SYNC_LIMIT,
@@ -55,8 +55,13 @@ describe("cold-client resync", () => {
         const afterT2 = alice.balance(ASSET);
 
         // Each transfer also funds a note paying the relayer out of alice's own
-        // inputs, so her running balance drops by more than she sent.
-        return { afterD1, afterT1, afterD2, afterT2, fee1: feePaid(t1), fee2: feePaid(t2) };
+        // inputs, so her running balance drops by more than she sent — and the
+        // relayer is confirmed to hold both.
+        return {
+            afterD1, afterT1, afterD2, afterT2,
+            fee1: await expectRelayerPaid(t1, ASSET),
+            fee2: await expectRelayerPaid(t2, ASSET),
+        };
     });
 
     it("activity sequence: 2 deposits + 2 transfers to bob", async () => {

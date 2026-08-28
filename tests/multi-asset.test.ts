@@ -9,8 +9,8 @@ import {
     ASSETS,
     awaitOwn,
     baseAmt,
-    depositFeePaid,
-    feePaid,
+    expectRelayerPaid,
+    expectRelayerPaidOnDeposit,
     scaleFor,
     feeFor,
     type Erc20Helpers,
@@ -69,9 +69,10 @@ describe("multi-asset deposit + withdraw", () => {
             const before = await snapshotBalances(token());
             const r = await alice.deposit({ amount: deposit, asset });
             await awaitOwn(alice, r);
-            // Read from the deposit's own event: the payer was debited for it
-            // on top of principal and the pool's shield fee.
-            const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+            // Read from the deposit's own event, and confirmed to have reached
+            // the relayer: the payer is debited on top of principal and the
+            // pool's shield fee either way.
+            const relayerFee = await expectRelayerPaidOnDeposit(h.provider, r.txHash, asset);
             return { before, relayerFee, after: await snapshotBalances(token()) };
         });
         const withdrawn = once(async () => {
@@ -79,7 +80,11 @@ describe("multi-asset deposit + withdraw", () => {
             const before = await snapshotBalances(token());
             const r = await alice.withdraw({ to: env.recipientAddress, amount: withdraw, asset });
             await awaitOwn(alice, r);
-            return { before, fee: feePaid(r), after: await snapshotBalances(token()) };
+            return {
+                before,
+                fee: await expectRelayerPaid(r, asset),
+                after: await snapshotBalances(token()),
+            };
         });
         return { deposited, withdrawn };
     }

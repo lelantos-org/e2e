@@ -32,8 +32,8 @@ import {
     TEST_NSK,
     TEST_TIMEOUT,
     trackedAddrs,
-    depositFeePaid,
-    feePaid,
+    expectRelayerPaid,
+    expectRelayerPaidOnDeposit,
     depositTotal,
     withFee,
 } from "../src/harness.js";
@@ -93,9 +93,10 @@ describe("masp e2e flow", () => {
             onPhase: (p) => phases.push(p),
         });
         await awaitOwn(alice, r);
-        // What the deposit escrowed for the relayer, read from its own event:
-        // the payer was debited for it on top of principal + fee.
-        const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+        // What the deposit escrowed for the relayer, read from its own event,
+        // and confirmed to have reached it: the payer is debited on top of
+        // principal + fee either way, even for a leaf no relayer can open.
+        const relayerFee = await expectRelayerPaidOnDeposit(h.provider, r.txHash, ASSET);
         return { before, phases, relayerFee, leaves: await leavesSinceStart() };
     });
 
@@ -111,7 +112,12 @@ describe("masp e2e flow", () => {
         });
         await awaitOwn(alice, r);
         await awaitRecipient(bob, r);
-        return { before, phases, fee: feePaid(r), leaves: await leavesSinceStart() };
+        return {
+            before,
+            phases,
+            fee: await expectRelayerPaid(r, ASSET),
+            leaves: await leavesSinceStart(),
+        };
     });
 
     const withdrawn = once(async () => {
@@ -123,7 +129,11 @@ describe("masp e2e flow", () => {
             asset: ASSET,
         });
         await awaitOwn(alice, r);
-        return { before, fee: feePaid(r), leaves: await leavesSinceStart() };
+        return {
+            before,
+            fee: await expectRelayerPaid(r, ASSET),
+            leaves: await leavesSinceStart(),
+        };
     });
 
     it("deposit: alice gets a note for the full amount", async () => {

@@ -17,6 +17,7 @@ import {
     ASSET,
     buildDeposit,
     counter,
+    expectRelayerPaidOnCommitment,
     type Harness,
     makeWallet,
     MASP_ABI,
@@ -137,7 +138,11 @@ describe("batch flush", () => {
                 }),
             ),
         );
-        const submitted = results.map((r, i) => ({ depositId: r.depositId, cm: builts[i].cm }));
+        const submitted = results.map((r, i) => ({
+            depositId: r.depositId,
+            cm: builts[i].cm,
+            feeCm: builts[i].deposit.feeCm,
+        }));
 
         const masp = new ethers.Contract(env.maspAddress, MASP_ABI, h.provider);
         const wantedIds = submitted.map((s) => s.depositId);
@@ -172,6 +177,12 @@ describe("batch flush", () => {
 
         for (const s of submitted) {
             await waitForCm(h.fmd, s.cm);
+            // A flush is only worth doing if it pays: each deposit's second leaf
+            // must be a note the relayer can open, which is what the
+            // `relayerFeeNote` above is meant to have built.
+            await expectRelayerPaidOnCommitment(
+                s.feeCm, feeValue, ASSET, `deposit ${s.depositId} fee`,
+            );
         }
     });
 });

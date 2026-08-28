@@ -7,7 +7,7 @@ import {
     ASSET,
     awaitOwn,
     awaitRecipient,
-    feePaid,
+    expectRelayerPaid,
     errorText,
     REVERT,
     TEST_NSK,
@@ -62,9 +62,11 @@ describe("edge: concurrent spends of one note", () => {
         await awaitOwn(alice, winner);
         expect(bob.balance(ASSET), "credited exactly once").toBe(SEND);
         // The input note is spent and alice keeps the change, less the fee the
-        // winning spend paid the relayer.
+        // winning spend paid the relayer. One landed spend, one fee: the loser
+        // reverted before it could fund a note.
+        const fee = await expectRelayerPaid(winner as TransferResult, ASSET);
         expect(alice.balance(ASSET), "the note is spent, not double-spent").toBe(
-            DEPOSIT - SEND - feePaid(winner as TransferResult),
+            DEPOSIT - SEND - fee,
         );
     }, TEST_TIMEOUT.SWAP);
 });

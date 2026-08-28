@@ -12,6 +12,7 @@ import {
     circuitFee,
     DEAD_ADDRESS,
     type Erc20Helpers,
+    expectRelayerPaid,
     expectRevert,
     FEE_HEADROOM,
     feeFor,
@@ -128,6 +129,9 @@ describe.skipIf(!process.env.SWAP_WRAPPER_ADDRESS)("masp swap e2e", () => {
 
         const r = await doSwap(quote);
         await awaitOwn(alice, r);
+        // Leg 1 is an ordinary relayer-served spend, so it funds a fee note in
+        // the *input* asset whatever the swap produces on the way out.
+        await expectRelayerPaid(r, ASSET);
         const outBalance = await awaitBalance(alice, ASSET_OUT);
 
         const receipt = await h.provider.getTransactionReceipt(r.txHash);

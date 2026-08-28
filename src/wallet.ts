@@ -48,6 +48,22 @@ export const TEST_NSK = {
  */
 const live = new Set<Wallet>();
 
+/** Run after every drain; see `onWalletsDisposed`. */
+const resets = new Set<() => void>();
+
+/**
+ * Register `fn` to run whenever the file's wallets are drained.
+ *
+ * For modules that memoise a wallet at module scope. Module state outlives the
+ * drain — the suite runs in one fork — so without this the next file's first
+ * call gets a handle whose scanner and prover have already been released, and
+ * the failure surfaces as a sync error attributed to that file rather than to
+ * the teardown of the previous one.
+ */
+export function onWalletsDisposed(fn: () => void): void {
+    resets.add(fn);
+}
+
 /**
  * Dispose every wallet built since the last drain.
  *
@@ -62,6 +78,7 @@ export async function disposeTestWallets(): Promise<void> {
     if (failed.length > 0) {
         log(`disposeTestWallets: ${failed.length}/${wallets.length} failed`);
     }
+    for (const reset of resets) reset();
 }
 
 export async function createTestWallet(

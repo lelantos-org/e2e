@@ -7,8 +7,8 @@ import {
     ASSETS,
     awaitOwn,
     baseAmt,
-    depositFeePaid,
-    feePaid,
+    expectRelayerPaid,
+    expectRelayerPaidOnDeposit,
     scaleFor,
     feeFor,
     type Erc20Helpers,
@@ -63,7 +63,7 @@ describe("withdraw native ETH (WETH unwrap)", () => {
         const before = await snap();
         const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
         await awaitOwn(alice, r);
-        const relayerFee = await depositFeePaid(h.provider, env.maspAddress, r.txHash);
+        const relayerFee = await expectRelayerPaidOnDeposit(h.provider, r.txHash, ASSET_WETH);
         return { before, relayerFee, after: await snap() };
     });
 
@@ -76,7 +76,7 @@ describe("withdraw native ETH (WETH unwrap)", () => {
             asset: ASSET_WETH,
         });
         await awaitOwn(alice, r);
-        return { before, fee: feePaid(r), after: await snap() };
+        return { before, fee: await expectRelayerPaid(r, ASSET_WETH), after: await snap() };
     });
 
     it("deposit WETH (shield leg)", async () => {
