@@ -28,8 +28,9 @@ const DEPOSIT_MDAI = amt(20n);
 const WITHDRAW_WETH = amt(5n);
 const WITHDRAW_MDAI = amt(10n);
 
-// At these magnitudes integer division floors the SDK fee to zero, so the net
-// delta simplifies to baseAmt(amount) - feeFor(amount).
+// Since SDK 0.28 the withdraw `amount` is the gross leaving the pool, so
+// publicOut == the amount passed and the net delta is
+// baseAmt(amount) - feeFor(amount).
 const SHIELD_FEE_WETH = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const SHIELD_FEE_MDAI = feeFor(DEPOSIT_MDAI, ASSET_MDAI);
 const UNSHIELD_FEE_WETH = feeFor(WITHDRAW_WETH, ASSET_WETH);

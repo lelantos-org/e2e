@@ -30,7 +30,7 @@ up:
 deploy:
     cd "{{ROOT}}" && npm run deploy
 
-# Download the tree_update_batch artifacts (wasm/r1cs/zkey) the relayer's prover
+# Download the tree_update_batch artifacts (witness graph + zkey) the relayer's prover
 # reads. The version comes from node_modules/@lelantos-org/circuits/package.json.
 # Idempotent: skips when ./circuits/.version matches. Stack.up() also runs it.
 fetch-circuits:

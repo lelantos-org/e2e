@@ -7,7 +7,8 @@
 export const MASP_ABI = [
     "function isKnownRoot(bytes32) view returns (bool)",
     "function committedCount() view returns (uint64)",
-    "function feeBps() view returns (uint16)",
+    // Per asset and per leg since contracts 0.5.0; there is no pool-wide rate.
+    "function assetFees(uint64 id) view returns (uint16 depositBps, uint16 withdrawBps)",
     "function treasury() view returns (address)",
     "function accruedFee(address) view returns (uint256)",
     // Per-deposit escrow digest; nonzero exactly while the deposit is still

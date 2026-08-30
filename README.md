@@ -13,8 +13,9 @@ Files run serially in path order, so `tests/` precedes `tests/edge/` and
 
 | Spec | Cases | Covers |
 |---|---|---|
-| [batch-flush](tests/batch-flush.test.ts) | 1 | Two deposits submitted in parallel, drained by the relayer into a single `flushBatch` transaction. |
+| [batch-flush](tests/batch-flush.test.ts) | 1 | Four deposits submitted in parallel, drained by the relayer into a single `flushBatch` transaction. |
 | [client-resync](tests/client-resync.test.ts) | 2 | Two deposits and two transfers, then a wallet built from the key alone reconstructs the recipient's balance from the chunk feed. |
+| [denominated-withdraw](tests/denominated-withdraw.test.ts) | 5 | A supplied withdrawal ladder: the preview reports the rungs and flags an amount between them, a withdrawal publishes the denomination exactly, and the change is split back onto the ladder. The only spec that exercises denominations — the built-in ladders are keyed by mainnet addresses, so this stack's mock tokens have none. |
 | [deposit-native](tests/deposit-native.test.ts) | 4 | `asEth` deposit through `NativeAdapter`: coin spent rather than WETH, pool credited, no residue on the adapter, fee accrued, resulting note spendable. Skipped without a native adapter. |
 | [double-spend](tests/double-spend.test.ts) | 3 | A note is deposited and spent, then replayed from a stale wallet and rejected. |
 | [full-flow](tests/full-flow.test.ts) | 6 | Deposit, shielded transfer with change, withdraw, treasury fee accrual on both legs, and recovery of the recipient's balance by a fresh client. Includes a Permit2 `maxTotal` revert. |

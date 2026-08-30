@@ -7,7 +7,6 @@ import {
     amt,
     ASSETS,
     awaitOwn,
-    circuitFee,
     feeFor,
     type Harness,
     TEST_NSK,
@@ -39,9 +38,10 @@ const FEE = feeFor(DEPOSIT, ASSET_WETH);
 const PRINCIPAL_PLUS_FEE = withFee(DEPOSIT, ASSET_WETH);
 
 const WITHDRAW = amt(4n);
-// A withdraw debits the shielded balance by the amount plus its circuit-unit
-// fee, which floors to zero at this magnitude.
-const WITHDRAW_DEBIT = WITHDRAW + circuitFee(WITHDRAW);
+// Since SDK 0.28 `amount` is the gross leaving the pool, so it is the whole
+// debit against the shielded balance — the protocol fee is skimmed out of it
+// rather than charged on top.
+const WITHDRAW_DEBIT = WITHDRAW;
 
 interface Snapshot {
     payerEth: bigint;

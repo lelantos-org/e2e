@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch tree_update_batch circuit artifacts (wasm + r1cs + zkey) from the
+# Fetch tree_update_batch circuit artifacts (witness graph + zkey) from the
 # @lelantos-org/circuits GitHub release into ./circuits/. The relayer container
 # bind-mounts this directory at /circuits and reads it at startup.
 #
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEST="${E2E_DIR}/circuits"
 REPO="lelantos-org/circuits"
-ASSETS=(tree_update_batch.wasm tree_update_batch.r1cs tree_update_batch_final.zkey 4x4_verification_key.json)
+ASSETS=(tree_update_batch.wcd tree_update_batch_final.zkey 4x6_verification_key.json)
 
 VERSION="${VERSION:-}"
 if [ -z "$VERSION" ]; then

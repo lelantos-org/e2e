@@ -46,9 +46,9 @@ const { alice: ALICE_NSK, bob: BOB_NSK } = TEST_NSK.fullFlow;
 // cannot spend its whole balance.
 const DEPOSIT = 125n;
 const TO_BOB = 60n;
-// The SDK's `amount` on a withdraw is net to the recipient; publicOut = amount
-// + fee.
-const WITHDRAW_NET = 40n;
+// Since SDK 0.28 the `amount` on a withdraw is the gross leaving the pool —
+// `publicOut` — and the protocol fee is skimmed out of it, so the recipient
+// receives `publicOut - fee` rather than `amount`.
 const WITHDRAW_PUBLIC_OUT = 42n;
 
 describe("masp e2e flow", () => {
@@ -125,7 +125,7 @@ describe("masp e2e flow", () => {
         const before = await snapshotBalances(erc20);
         const r = await alice.withdraw({
             to: env.recipientAddress,
-            amount: amt(WITHDRAW_NET),
+            amount: amt(WITHDRAW_PUBLIC_OUT),
             asset: ASSET,
         });
         await awaitOwn(alice, r);
@@ -169,7 +169,7 @@ describe("masp e2e flow", () => {
         );
     }, TEST_TIMEOUT.SPEND);
 
-    it("withdraw: alice unshields 40 (net) to a public address", async () => {
+    it("withdraw: alice unshields 42 (gross) to a public address", async () => {
         const { before, fee, leaves } = await withdrawn();
         const { fee: transferFee } = await transferred();
 
@@ -226,7 +226,12 @@ describe("masp e2e flow", () => {
 
     it("treasury accrues 5% on deposit + withdraw legs", async () => {
         await withdrawn();
-        expect(await h.masp.feeBps()).toBe(FEE_BPS);
+        // Both legs are deployed at the same rate (`stack.ts` sets
+        // MASP_DEPOSIT_BPS and MASP_WITHDRAW_BPS alike), which is what lets
+        // `feeFor` be one function rather than two.
+        const [depositBps, withdrawBps] = await h.masp.assetFees(ASSET);
+        expect(depositBps).toBe(FEE_BPS);
+        expect(withdrawBps).toBe(FEE_BPS);
         expect((await h.masp.treasury()) as string).not.toBe(ethers.ZeroAddress);
         // Lower bound: `accruedFee` is cumulative and the MASP is shared, so
         // other files depositing asset 2 raise it.

@@ -1,8 +1,9 @@
 import {
+    type DenominationPolicy,
     type EthSigner,
     InMemoryNoteStore,
     nodeWallet,
-    TRANSACT_4X4,
+    TRANSACT_4X6,
     ViemChainAdapter,
     type Wallet,
 } from "@lelantos-org/sdk";
@@ -18,6 +19,15 @@ import { log } from "./utils.js";
 export interface CreateWalletOpts {
     signer?: EthSigner;
     noteStore?: InMemoryNoteStore;
+    /**
+     * Withdrawal denominations, keyed by token address.
+     *
+     * The SDK's built-in ladders are keyed by mainnet USDC/WETH addresses, so
+     * the mock tokens this stack deploys resolve to no ladder at all and every
+     * denomination path is inert. A test that wants one has to supply it, and
+     * can only do so after the deploy has named the token.
+     */
+    denominations?: DenominationPolicy;
 }
 
 // Each test file uses a distinct prefix. Files share one anvil and one FMD
@@ -36,6 +46,7 @@ export const TEST_NSK = {
     negZeroValue:   { alice: 0xe2_a1ce_a11c0n },
     negDepositFee:  { alice: 0xe3_a1ce_a11c0n },
     edgeConcurrent: { alice: 0xed_a1ce_a11c0n, bob: 0xed_b0b_b0b00n },
+    denominated:    { alice: 0xd0_a1ce_a11c0n },
 } as const;
 
 /**
@@ -101,13 +112,14 @@ export async function createTestWallet(
         config: {
             chainId: env.chainId,
             treeDepth: TREE_DEPTH,
-            shape: TRANSACT_4X4,
+            shape: TRANSACT_4X6,
             relayerAddress: RELAYER.address,
             chain,
             fmdUrl: env.fmdUrl,
             relayerUrl: env.relayerUrl,
             proverPaths: PROVER_PATHS,
             noteStore: opts.noteStore ?? new InMemoryNoteStore(),
+            ...(opts.denominations !== undefined ? { denominations: opts.denominations } : {}),
         },
     });
     live.add(wallet);

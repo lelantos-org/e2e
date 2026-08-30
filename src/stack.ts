@@ -58,7 +58,11 @@ export class Stack {
         const rpcUrl = this.rpcUrl();
         const baseEnv: Record<string, string> = {
             ...process.env as Record<string, string>,
-            MASP_FEE_BPS: FEE_BPS.toString(),
+            // Split into two rates in contracts 0.4.0+; `MASP_FEE_BPS` is no
+            // longer read. Both legs get the same rate so `feeFor` stays one
+            // function — see `protocol/amounts.ts`.
+            MASP_DEPOSIT_BPS: FEE_BPS.toString(),
+            MASP_WITHDRAW_BPS: FEE_BPS.toString(),
             // Permit2 is pre-deployed by `up()`; skip DeployTest's `vm.getCode`
             // fallback.
             PERMIT2: CANONICAL_PERMIT2_ADDRESS,

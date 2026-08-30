@@ -3,9 +3,9 @@
 // a deposit occupies two leaves — the depositor's note and the note paying
 // whoever flushed it.
 //
-// N is the contract's ceiling. `MAX_L_BATCH = 4` counts leaves and is pinned by
-// the batch circuit's `COUNT_BITS = 2`, so one flush carries at most
-// `4 / 2 = 2` deposits. A larger N cannot land in a single tx, and the test
+// N is the contract's ceiling. `MAX_L_BATCH = 8` counts leaves and is pinned by
+// the batch circuit's `COUNT_BITS = 3`, so one flush carries at most
+// `8 / 2 = 4` deposits. A larger N cannot land in a single tx, and the test
 // would then fail on that limit rather than on a regression.
 
 import { ethers } from "ethers";
@@ -39,7 +39,7 @@ import {
 import { setupFile } from "../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.batchFlush;
-const N = 2;
+const N = 4;
 const DEPOSIT_AMT = amt(10n);
 // `retry: 2` below allows up to three attempts, each burning N deposits, and
 // `beforeAll` does not re-run between them. Funding for all three keeps a retry

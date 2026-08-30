@@ -26,7 +26,8 @@ const WITHDRAW_WETH = amt(8n);
 
 const SHIELD_FEE = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const UNSHIELD_FEE = feeFor(WITHDRAW_WETH, ASSET_WETH);
-// The SDK fee floors to 0 at this magnitude, so publicOut == WITHDRAW_WETH.
+// Since SDK 0.28 `amount` is the gross, so publicOut == WITHDRAW_WETH and the
+// recipient receives it less the unshield fee.
 const NET_WITHDRAW = baseAmt(WITHDRAW_WETH, ASSET_WETH) - UNSHIELD_FEE;
 
 interface Snapshot {

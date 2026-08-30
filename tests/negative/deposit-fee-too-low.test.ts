@@ -34,8 +34,8 @@
 // The last case is the one that pins the relayer's liveness. `pop_pending`
 // orders oldest-first, so deposits the relayer declines sit at the head of the
 // batch window; it defers them and scans past them
-// (`services::pipeline::deposit_failures`), and without that a pair of them
-// fills the window and no later deposit on the chain ever flushes.
+// (`services::pipeline::deposit_failures`), and without that a full window of
+// them fills the batch and no later deposit on the chain ever flushes.
 
 import { ethers } from "ethers";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -72,9 +72,9 @@ import { setupFile } from "../../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.negDepositFee;
 const DEPOSIT = amt(10n);
-// Two cases of one skipped deposit and a control, then three more for the
-// head-of-window case.
-const DEPOSITS = 7n;
+// Two cases of one skipped deposit and a control, then five more for the
+// head-of-window case: a full window of four blocking deposits and one payer.
+const DEPOSITS = 9n;
 
 /** How the deposit's fee leaf fails to pay this relayer. */
 type Underpayment = "addressed elsewhere" | "worth nothing";
@@ -203,13 +203,19 @@ describe("negative: deposit whose fee note does not pay the relayer", () => {
     }, TEST_TIMEOUT.SEQUENCE);
 
     it("flushes a paying deposit queued behind enough skipped ones to fill the batch", async () => {
-        // `flush_max_n` is clamped to the contract's two deposits per batch, so
-        // two skipped deposits are a full window. They are submitted first and
-        // are therefore the oldest pending rows: the relayer reaches the paying
-        // deposit only by deferring them and scanning past them.
+        // `flush_max_n` is clamped to the contract's four deposits per batch
+        // (`MAX_L_BATCH = 8` leaves, two per deposit), so four skipped deposits
+        // are a full window. They are submitted first and are therefore the
+        // oldest pending rows: the relayer reaches the paying deposit only by
+        // deferring them and scanning past them.
         const startBlock = await h.provider.getBlockNumber();
         const required = await quoteDepositFee(h.relayer, env.chainId, ASSET);
-        const blocking = [await submit("addressed elsewhere"), await submit("worth nothing")];
+        const blocking = [
+            await submit("addressed elsewhere"),
+            await submit("worth nothing"),
+            await submit("addressed elsewhere"),
+            await submit("worth nothing"),
+        ];
         const paid = await submit(required);
 
         await waitForBatchFlushTx({
