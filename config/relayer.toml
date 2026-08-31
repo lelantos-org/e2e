@@ -14,6 +14,14 @@ pool_address = "0x0000000000000000000000000000000000000000"
 signer_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 receipt_timeout_s = 60
 flush_interval_s = 5
+# Pinned rather than left to the relayer's default. `MAX_L_BATCH = 8` and
+# `LEAVES_PER_DEPOSIT = 2` make `MAX_DEPOSITS_PER_BATCH = 4`, which is what
+# `tests/batch-flush.test.ts` asserts on: at anything less its four intents
+# split across two flushBatch txs. The default derives from the same constant
+# as of the fix in `default_flush_max_n()`, so this is now belt-and-braces —
+# kept explicit because the test's expectation is a config fact, not a
+# default worth inheriting silently.
+flush_max_n = 4
 
 # Shielded fees are enabled for this stack. Setting the address enables both
 # paths: a spend must carry an output note to it, and a deposit's second leaf

@@ -6,16 +6,18 @@
 // circuit-unit denominations, prefers them when splitting change, and reports
 // whether a given amount is on one.
 //
-// None of that is exercised by the rest of the suite: the built-in ladders are
-// keyed by mainnet USDC/WETH addresses, and this stack deploys mock tokens, so
-// every asset resolves to an empty ladder and the denomination paths are inert.
-// This file supplies a ladder explicitly — which is only possible after the
-// deploy has named the token — and is the only place they run.
+// Until SDK 0.32.0 the ladders were a table keyed by mainnet USDC/WETH
+// addresses, so this stack's mock tokens resolved to an empty ladder and the
+// denomination paths were inert unless a test supplied its own table. The SDK
+// now derives every asset's ladder from its `scale` and `decimals`, so there is
+// no table to be absent from and nothing to inject — the amounts below are
+// chosen to sit on the ladder the asset actually gets.
 //
 // The ladder is in CIRCUIT units, not human ones. A denomination converted from
 // a human amount at runtime moves as the yield index moves, which reproduces
 // exactly the fingerprint the ladder exists to remove.
 
+import { universalLadder } from "@lelantos-org/sdk/core";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env.js";
@@ -29,6 +31,7 @@ import {
     FEE_HEADROOM,
     feeFor,
     type Erc20Helpers,
+    scaleFor,
     snapshotBalances,
     TEST_NSK,
     TEST_TIMEOUT,
@@ -38,22 +41,27 @@ import {
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
 
 /**
- * The ladder this file installs, ascending, in circuit units.
+ * The ladder this asset gets, ascending, in circuit units.
  *
- * A `{1, 2, 5} × 10^e` run like the built-ins, sized to the amounts below
- * rather than to a real token: at `scale = 1e10` these are 5e-8 … 1e-6 mDAI,
- * which is meaningless as money and exactly right as arithmetic.
+ * Derived rather than written out: it is a pure function of the asset's `scale`
+ * (and `decimals`, which narrows nothing here), so hardcoding it would be a
+ * second copy free to drift from the one the wallet actually uses. `{1, 2, 5} ×
+ * 10^e` over the universal window, which at `scale = 1e10` starts at 1e5
+ * circuit units — four orders of magnitude above the amounts this file used
+ * when it supplied its own ladder.
  */
-const LADDER = [5n, 10n, 20n, 50n, 100n] as const;
+const LADDER = universalLadder({ scale: scaleFor(ASSET) });
 
-const DEPOSIT = amt(200n);
+/** Comfortably above `WITHDRAW` plus its fee, and itself a rung. */
+const DEPOSIT = amt(2_000_000n);
 /** On the ladder. What the chain publishes, and what the fee is skimmed from. */
-const WITHDRAW = amt(50n);
+const WITHDRAW = amt(500_000n);
 /**
- * Deliberately between rungs, and exactly halfway: 35 is 15 from 20 and 15 from
- * 50, which is what makes it a test of the tie rule and not just of the gap.
+ * Deliberately between rungs, and exactly halfway: 350k is 150k from both 200k
+ * and 500k, which is what makes it a test of the tie rule and not just of the
+ * gap. Ties go to the smaller, so the suggestion must be 200k.
  */
-const OFF_LADDER = amt(35n);
+const OFF_LADDER = amt(350_000n);
 
 describe("withdraw at a fixed denomination", () => {
     let alice: SdkWallet;
@@ -63,8 +71,6 @@ describe("withdraw at a fixed denomination", () => {
         const f = await setupFile({
             nsks: TEST_NSK.denominated,
             fund: [{ asset: ASSET, amount: withFee(DEPOSIT + FEE_HEADROOM) }],
-            // Keyed by token address, which the deploy only just decided.
-            denominations: new Map([[env.token2, [...LADDER]]]),
         });
         ({ alice } = f.w);
         erc20 = f.token(ASSET);
@@ -98,7 +104,7 @@ describe("withdraw at a fixed denomination", () => {
         await deposited();
         const p = await alice.previewWithdraw({ amount: WITHDRAW, asset: ASSET });
 
-        expect(p.hasLadder, "the supplied ladder reached the AssetInfo").toBe(true);
+        expect(p.hasLadder, "the derived ladder reached the AssetInfo").toBe(true);
         expect(p.denominations).toEqual([...LADDER]);
         expect(p.onLadder).toBe(true);
         expect(p.suggestion, "nothing to suggest for an amount already on it").toBeUndefined();
@@ -136,9 +142,9 @@ describe("withdraw at a fixed denomination", () => {
 
         expect(p.hasLadder).toBe(true);
         expect(p.onLadder).toBe(false);
-        // Equidistant from 20 and 50; the tie goes to the smaller, so a
+        // Equidistant from 200k and 500k; the tie goes to the smaller, so a
         // suggestion never silently costs more than was asked for.
-        expect(p.suggestion).toBe(20n);
+        expect(p.suggestion).toBe(amt(200_000n));
     }, TEST_TIMEOUT.SPEND);
 
     it("publishes exactly the denomination and pays the recipient net of the fee", async () => {
@@ -185,7 +191,7 @@ describe("withdraw at a fixed denomination", () => {
         // always land every unit on it: `decompose` fills the slots it has and
         // carries whatever is left as a single residual. One is the contract —
         // two would mean change was split evenly and the ladder ignored.
-        const offLadder = change.filter((v) => !LADDER.includes(v as (typeof LADDER)[number]));
+        const offLadder = change.filter((v) => !LADDER.includes(v));
         expect(offLadder.length, `change was ${change.join(", ")}`).toBeLessThanOrEqual(1);
     }, TEST_TIMEOUT.SPEND);
 });
