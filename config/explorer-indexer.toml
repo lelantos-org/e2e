@@ -1,12 +1,22 @@
-# Explorer indexer config. Mounted at /etc/explorer-indexer.toml in the container.
+# Explorer indexer config. Mounted at /etc/explorer-indexer.toml in the
+# container. chain_id matches anvil's `--chain-id=31337`; nothing here is
+# overridden from env, since the indexer needs no deployed address.
 
 database_url = "postgres://postgres:postgres@postgres:5432/postgres"
 erc20_metadata_timeout_ms = 2000
-rpc_urls = []
 
-# Optional per-chain RPC for ERC20 metadata enrichment. The event pipeline does
-# not need RPC — asset metadata comes from AssetRegistered — so this can stay
-# empty.
-# [[rpc_urls]]
-# chain_id = 1
-# url = "http://host.docker.internal:8545"
+# The chain's RPC. Not optional, despite the event pipeline needing none: the
+# yield-state poller reads `gross`, `totalNormalized` and the index off the pool
+# over RPC, because they move with the venue on every block and no event carries
+# them. Without a reader for this chain that half of `asset_yield` stays NULL,
+# the relayer declines to price a unit it cannot value, and every yield asset is
+# quoted no deposit fee — which surfaces test-side as "the relayer charges to
+# flush deposits but quoted no amount for asset 4". ERC20 `decimals()` and
+# `symbol()` enrichment rides on the same URL.
+#
+# The key is `chains`/`rpc_url`, as `ExplorerIndexerConfig` names them. An
+# earlier `rpc_urls = []` here parsed as nothing at all: the struct takes
+# `#[serde(default)]` on `chains`, so a misspelt table is silently no chains.
+[[chains]]
+chain_id = 31337
+rpc_url = "http://anvil:8545"

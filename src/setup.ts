@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 resolveDockerHost();
 enableRyuk();
 
+import { waitForQuotableAssets } from "./registry-ready.js";
 import type { StackEnv } from "./stack.js";
 import { log } from "./utils.js";
 
@@ -31,7 +32,15 @@ export default async function setup() {
     const urls = await stack.upBackend(addrs);
     log("urls =", urls);
 
-    publishEnv(stack.env(urls));
+    const e = stack.env(urls);
+    publishEnv(e);
+
+    // After the services are up and before any test runs: the relayer caches
+    // the indexer's asset table, and the yield ids reach it last. See
+    // `registry-ready.ts`.
+    log("waiting for the relayer to quote every registered asset…");
+    await waitForQuotableAssets(e.relayer, BigInt(e.chainId), registeredAssets(e));
+    log("relayer quotes every registered asset");
 
     return async () => {
         if (keepAlive()) {
@@ -93,6 +102,17 @@ function enableRyuk(): void {
  */
 function keepAlive(): boolean {
     return process.env.E2E_KEEP_ALIVE === "1";
+}
+
+/**
+ * Every asset id the deploy registered, plain ids first.
+ *
+ * Read off the deploy's own output rather than from `protocol/assets.ts`: the
+ * yield block is absent when `E2E_SKIP_YIELD=1`, and waiting for ids that were
+ * never registered would hang the whole suite rather than skip the yield tests.
+ */
+function registeredAssets(e: StackEnv): bigint[] {
+    return [...Object.keys(e.tokens), ...Object.keys(e.yield ?? {})].map(BigInt);
 }
 
 function publishEnv(e: StackEnv): void {
