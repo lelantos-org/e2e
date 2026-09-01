@@ -13,7 +13,7 @@ import {
 } from "testcontainers";
 
 import { DEPLOYER, PAYER, RECIPIENT } from "./accounts.js";
-import { type Addresses, requireToken, type StackEnv, type SwapAddresses, type Urls } from "./infra/addresses.js";
+import { type Addresses, requireToken, type StackEnv, type SwapAddresses, type Urls, type YieldAsset } from "./infra/addresses.js";
 import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, logDir } from "./infra/docker.js";
 import { FEE_BPS } from "./protocol/amounts.js";
 import { FEE_TOKENS } from "./protocol/assets.js";
@@ -30,7 +30,7 @@ interface RunningService {
 
 const execFileAsync = promisify(execFile);
 
-export type { Addresses, StackEnv, SwapAddresses, Urls } from "./infra/addresses.js";
+export type { Addresses, StackEnv, SwapAddresses, Urls, YieldAsset } from "./infra/addresses.js";
 
 export class Stack {
     private network?: StartedNetwork;
@@ -71,21 +71,31 @@ export class Stack {
         const coreOut = await runForgeScript("DeployTest", rpcUrl, baseEnv);
         this.addresses = parseDeployOutput(coreOut);
 
-        // DeployTestSwap runs after the core deploy and reads
-        // MASP/PERMIT2/TOKEN_* from env. E2E_SKIP_SWAP=1 skips it, so non-swap
-        // suites can run without the mock UniV3 stack.
+        // Both follow-on scripts read the core deploy's addresses back out of
+        // the environment, in the same `MASP` / `PERMIT2` / `TOKEN_<id>` shape
+        // the core script logged them in.
+        const deployedEnv = { ...baseEnv, ...addressEnv(this.addresses) };
+
+        // DeployTestSwap runs after the core deploy. E2E_SKIP_SWAP=1 skips it,
+        // so non-swap suites can run without the mock UniV3 stack.
         if (process.env.E2E_SKIP_SWAP !== "1") {
-            const swapEnv: Record<string, string> = {
-                ...baseEnv,
-                MASP: this.addresses.masp,
-                PERMIT2: this.addresses.permit2,
-            };
-            for (const [id, addr] of Object.entries(this.addresses.tokens)) {
-                swapEnv[`TOKEN_${id}`] = addr;
-            }
-            const swapOut = await runForgeScript("DeployTestSwap", rpcUrl, swapEnv);
+            const swapOut = await runForgeScript("DeployTestSwap", rpcUrl, deployedEnv);
             const swap = requireSwapAddresses(stripAnsi(swapOut), "swap deploy");
             this.addresses = { ...this.addresses, swap };
+        }
+
+        // DeployTestYield registers a second, yield-bearing id for every
+        // registered asset — a MockERC4626 vault plus its ERC4626Venue, bound
+        // through `addYieldAsset`. It runs last because the binding is
+        // permanent: `addYieldAsset` goes through the add-only registry, so a
+        // re-run against a live MASP reverts rather than rebinding.
+        // E2E_SKIP_YIELD=1 skips it, as E2E_SKIP_SWAP does for the swap stack.
+        if (process.env.E2E_SKIP_YIELD !== "1") {
+            const yieldOut = await runForgeScript("DeployTestYield", rpcUrl, deployedEnv);
+            this.addresses = {
+                ...this.addresses,
+                yield: requireYieldAssets(stripAnsi(yieldOut), "yield deploy"),
+            };
         }
         return this.addresses;
     }
@@ -154,6 +164,7 @@ export class Stack {
             permit2: this.addresses.permit2,
             nativeAdapter: this.addresses.nativeAdapter,
             swap: this.addresses.swap,
+            yield: this.addresses.yield,
         };
     }
 
@@ -260,6 +271,23 @@ function stripAnsi(s: string): string {
     return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+/**
+ * The core deploy's addresses as the environment the follow-on scripts read.
+ *
+ * They take `MASP`, `PERMIT2` and one `TOKEN_<id>` per registered asset — the
+ * same keys `DeployTest` logged — so this is the deploy's own output handed
+ * back rather than a second table either script could disagree with.
+ */
+function addressEnv(a: Addresses): Record<string, string> {
+    return {
+        MASP: a.masp,
+        PERMIT2: a.permit2,
+        ...Object.fromEntries(
+            Object.entries(a.tokens).map(([id, addr]) => [`TOKEN_${id}`, addr]),
+        ),
+    };
+}
+
 /** `KEY=0xaddress` pairs from forge script output. */
 function parseAddressPairs(stripped: string): Map<string, string> {
     const re = /\b([A-Z][A-Z0-9_]*)=(0x[0-9a-fA-F]{40})/g;
@@ -297,6 +325,43 @@ function requireSwapAddresses(stripped: string, what: string): SwapAddresses {
         if (!found.has(k)) throw new Error(`${what}: missing ${k} in forge output:\n${stripped}`);
     }
     return readSwapAddresses(found);
+}
+
+const YIELD_LEGS = ["TOKEN", "VAULT", "VENUE"] as const;
+
+/**
+ * Every `YIELD_{TOKEN,VAULT,VENUE}_<id>` triple DeployTestYield logs, or throw
+ * naming the first missing leg — the same all-or-nothing rule the swap
+ * addresses follow, for the same reason: a venue without its vault is a script
+ * that changed shape, and the caller would otherwise get an object with
+ * `undefined` fields typed as `string`.
+ *
+ * The ids come out of the keys rather than from `YIELD_ID_OFFSET`. The offset
+ * defaults to the fixture's asset count, so recomputing it here would be a
+ * second copy of a number the script already decided.
+ */
+function requireYieldAssets(stripped: string, what: string): Record<number, YieldAsset> {
+    const found = parseAddressPairs(stripped);
+
+    const ids = new Set<number>();
+    for (const k of found.keys()) {
+        const m = k.match(/^YIELD_(?:TOKEN|VAULT|VENUE)_(\d+)$/);
+        if (m) ids.add(Number(m[1]));
+    }
+    if (ids.size === 0) throw new Error(`${what}: no YIELD_* addresses in forge output:\n${stripped}`);
+
+    const assets: Record<number, YieldAsset> = {};
+    for (const id of ids) {
+        const [token, vault, venue] = YIELD_LEGS.map((leg) => {
+            const addr = found.get(`YIELD_${leg}_${id}`);
+            if (addr === undefined) {
+                throw new Error(`${what}: missing YIELD_${leg}_${id} in forge output:\n${stripped}`);
+            }
+            return addr;
+        });
+        assets[id] = { token, vault, venue };
+    }
+    return assets;
 }
 
 // The relayer mounts <e2e>/circuits/ at /circuits and reads

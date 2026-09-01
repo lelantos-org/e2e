@@ -48,13 +48,20 @@ const REGISTRY = [
 type RegistryEntry = (typeof REGISTRY)[number];
 
 /**
- * Asset ids by name, branded at the source: the SDK wallet surface takes
- * `AssetId`, and the brand widens back to `bigint` for the local scale/fee
- * helpers and for `bundleCommon`.
+ * Every registry id by name, branded at the source: the SDK wallet surface
+ * takes `AssetId`, and the brand widens back to `bigint` for the local
+ * scale/fee helpers and for `bundleCommon`.
  */
-export const ASSETS = Object.fromEntries(
-    REGISTRY.map((a) => [a.key, assetId(BigInt(a.id))]),
-) as { readonly [K in RegistryEntry["key"]]: AssetId };
+type IdsByKey = { readonly [K in RegistryEntry["key"]]: AssetId };
+
+/** The registry's ids shifted by `offset`, keyed by name. */
+function idsByKey(offset: bigint): IdsByKey {
+    return Object.fromEntries(
+        REGISTRY.map((a) => [a.key, assetId(BigInt(a.id) + offset)]),
+    ) as IdsByKey;
+}
+
+export const ASSETS = idsByKey(0n);
 
 /** Default asset for `feeFor` / `baseAmt` / `withFee`. */
 export const ASSET: AssetId = ASSETS.MDAI;
@@ -84,8 +91,52 @@ export const FEE_TOKENS = REGISTRY.map((a) => ({
     quoteSymbol: FEE_QUOTE_SYMBOL,
 }));
 
+/**
+ * Plain id → yield id shift, mirroring `DeployTestYield`'s `YIELD_ID_OFFSET`
+ * default of the fixture's asset count (1,2,3 -> 4,5,6).
+ *
+ * A yield id is registered *alongside* its plain id, never in place of it: the
+ * plain id stays risk-free custody, the yield id lends through an
+ * `ERC4626Venue`, and a depositor opts in by choosing an id. Both therefore
+ * share one ERC-20 and one `scale`, and differ only in the venue binding.
+ *
+ * Mirrored rather than read back for the same reason `REGISTRY` is: the deploy
+ * publishes the real ids in `YIELD_ASSET_IDS`, and a shift that stopped
+ * matching would surface there as a lookup for an id the script never
+ * registered.
+ */
+export const YIELD_ID_OFFSET = BigInt(REGISTRY.length);
+
+/**
+ * Yield asset ids by the same name as their plain counterparts, so a test can
+ * say `YIELD_ASSETS.MDAI` for the lending id and `ASSETS.MDAI` for the plain
+ * one.
+ */
+export const YIELD_ASSETS = idsByKey(YIELD_ID_OFFSET);
+
+const YIELD_IDS: ReadonlySet<bigint> = new Set(
+    REGISTRY.map((a) => BigInt(a.id) + YIELD_ID_OFFSET),
+);
+
+/** Whether `asset` is one of the deploy's yield ids rather than a plain one. */
+export function isYieldAsset(asset: bigint): boolean {
+    return YIELD_IDS.has(asset);
+}
+
+/**
+ * The plain id a yield id shadows; the id itself when it is already plain.
+ *
+ * The two share an ERC-20 and a scale, so every per-asset table keyed by the
+ * plain id — `REGISTRY`, the deployed `tokens` map, the relayer's fee tokens —
+ * is reached through here rather than duplicated per yield id.
+ */
+export function plainAssetOf(asset: bigint): bigint {
+    return isYieldAsset(asset) ? asset - YIELD_ID_OFFSET : asset;
+}
+
 export function scaleFor(asset: bigint): bigint {
-    const entry = REGISTRY.find((a) => BigInt(a.id) === asset);
+    const plain = plainAssetOf(asset);
+    const entry = REGISTRY.find((a) => BigInt(a.id) === plain);
     if (entry === undefined) throw new Error(`scaleFor: unknown asset id ${asset}`);
     return entry.scale;
 }

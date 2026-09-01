@@ -13,7 +13,19 @@ export const CONFIG_DIR = resolve(E2E_DIR, "config");
 export const CIRCUITS_DIR = resolve(E2E_DIR, "circuits");
 export const ORACLE_DIR = resolve(CONFIG_DIR, "oracle");
 const VENDOR_DIR = resolve(E2E_DIR, "vendor");
-export const CONTRACTS_DIR = resolve(VENDOR_DIR, "contracts");
+
+/**
+ * The forge project the deploy scripts are run from.
+ *
+ * `vendor/contracts` is the pinned submodule and the only thing CI uses.
+ * `E2E_CONTRACTS_DIR` points the deploy at another checkout instead, for
+ * driving the suite against contract work that has not been tagged and
+ * vendored yet — the submodule can only name a pushed commit, and an
+ * in-progress branch is not one.
+ */
+export const CONTRACTS_DIR = process.env.E2E_CONTRACTS_DIR
+    ? resolve(process.env.E2E_CONTRACTS_DIR)
+    : resolve(VENDOR_DIR, "contracts");
 
 /**
  * Where per-service logs are written.

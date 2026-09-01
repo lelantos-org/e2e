@@ -15,6 +15,22 @@ export interface SwapAddresses {
     wrapper: string;
 }
 
+/**
+ * One `DeployTestYield` triple, keyed by the *yield* asset id it was
+ * registered under.
+ *
+ * `token` is the same ERC-20 the plain id already points at — a yield id is
+ * registered alongside its plain id, not in place of it, and the two differ
+ * only in the venue binding. It is carried anyway rather than derived, because
+ * the script logs it: an offset that ever stops matching shows up here as a
+ * mismatched address instead of silently pairing the wrong vault.
+ */
+export interface YieldAsset {
+    token: string;
+    vault: string;
+    venue: string;
+}
+
 export interface Addresses {
     verifier: string;
     treeUpdateVerifier: string;
@@ -24,6 +40,8 @@ export interface Addresses {
     nativeAdapter?: string;
     permit2: string;
     swap?: SwapAddresses;
+    /** Absent when the stack was brought up with `E2E_SKIP_YIELD=1`. */
+    yield?: Record<number, YieldAsset>;
 }
 
 export interface Urls {
@@ -45,6 +63,7 @@ export interface StackEnv extends Urls {
     permit2: string;
     nativeAdapter?: string;
     swap?: SwapAddresses;
+    yield?: Record<number, YieldAsset>;
 }
 
 /**

@@ -12,7 +12,7 @@ import { RelayerClient } from "@lelantos-org/sdk/relayer";
 import { RELAYER } from "./accounts.js";
 import { MASP_ABI, MASP_DEPOSIT_ABI } from "./protocol/abi.js";
 import { FEE_HEADROOM } from "./protocol/amounts.js";
-import { ASSET, scaleFor } from "./protocol/assets.js";
+import { ASSET, plainAssetOf, scaleFor } from "./protocol/assets.js";
 import { parseContractLogs } from "./protocol/logs.js";
 import { TREE_DEPTH } from "./protocol/shape.js";
 import { PROVER_PATHS } from "./testkit/prover.js";
@@ -55,7 +55,10 @@ let _J: Promise<Jubjub> | undefined;
 // Mirrors the asset registry fixture the stack deploys. WETH is the only
 // wrapped-native entry; the rest are mocks with a public `mint`.
 export function tokenAddressFor(asset: bigint): { address: string; kind: "erc20" | "weth" } {
-    switch (asset) {
+    // Through the plain id: a yield asset is registered alongside the plain one
+    // and shares its ERC-20, so it funds and settles out of the same token
+    // rather than needing a row of its own here.
+    switch (plainAssetOf(asset)) {
         case 1n: return { address: env.token1, kind: "weth" };
         case 2n: return { address: env.token2, kind: "erc20" };
         case 3n: return { address: env.token3, kind: "erc20" };
@@ -298,7 +301,14 @@ export {
     feeFor,
     withFee,
 } from "./protocol/amounts.js";
-export { ASSET, ASSETS, scaleFor } from "./protocol/assets.js";
+export {
+    ASSET,
+    ASSETS,
+    isYieldAsset,
+    plainAssetOf,
+    scaleFor,
+    YIELD_ASSETS,
+} from "./protocol/assets.js";
 export { errorText, REVERT } from "./protocol/reverts.js";
 export { N_OUT } from "./protocol/shape.js";
 export { DEAD_ADDRESS } from "./chain/well-known.js";

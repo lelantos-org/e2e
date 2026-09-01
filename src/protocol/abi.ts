@@ -66,3 +66,35 @@ export const SWAP_WRAPPER_ABI = [
     "function adapterAllowed(address) view returns (bool)",
     "event SwapExecuted(address indexed adapter, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 actualOut, uint256 dust, uint256 depositId)",
 ] as const;
+
+/**
+ * The local yield vault, as the suite drives it.
+ *
+ * Only the mutators: the vault starts empty at a 1:1 share price and nothing in
+ * the deploy seeds it, so `earn` and `lose` are the only way a test moves the
+ * index off `RAY`. What the move did is read back off the pool, through
+ * {@link MASP_YIELD_ABI}, rather than off the vault's own share price.
+ */
+export const MOCK_ERC4626_ABI = [
+    // Credits the vault with `amt` more underlying than was deposited, without
+    // minting shares: the index moves, every holder's units are worth more.
+    "function earn(uint256 amt)",
+    "function lose(uint256 amt)",
+    // Caps what `withdraw` will pay out, for exercising the pool's idle-buffer
+    // refill path against a venue that cannot return everything at once.
+    "function setLiquidityCap(uint256 cap)",
+] as const;
+
+/** The pool's per-asset yield state, and what the venue holds against it. */
+export const MASP_YIELD_ABI = [
+    // Derived, RAY-scaled, and floored — a display figure. Size a payment off
+    // the `yieldState` gross/supply pair instead; see the SDK's
+    // `toTokenUnitsAtRate`.
+    "function index(uint64 id) view returns (uint256)",
+    "function yieldState(uint64 id) view returns ((address venue, uint16 bufferBps, uint16 perfBps, bool halted, uint256 totalNormalized, uint256 accruedFeeNormalized, uint256 idle, uint256 lastIdx, uint256 index))",
+] as const;
+
+/** The venue leg of the pool's gross: what it currently holds at the vault. */
+export const YIELD_VENUE_ABI = [
+    "function totalAssets() view returns (uint256)",
+] as const;

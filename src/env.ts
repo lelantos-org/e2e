@@ -20,15 +20,35 @@ function opt(name: string): string | undefined {
     return process.env[name] || undefined;
 }
 
-// Throws unless the swap stack was deployed in this run.
-function reqSwap<T>(getter: () => T | undefined, name: string): T {
-    const v = getter();
+/**
+ * Read a var that exists only when an optional deploy step ran, naming the
+ * flag that turns that step off.
+ *
+ * The two optional stacks fail the same way — a test written against one runs
+ * fine until someone skips it — so the message points at the switch rather
+ * than at the missing variable alone.
+ */
+function reqStep(name: string, skipFlag: string): string {
+    const v = opt(name);
     if (v === undefined) {
-        throw new Error(
-            `missing env var: ${name} — set E2E_SKIP_SWAP=0 (default) and rerun setup`,
-        );
+        throw new Error(`missing env var: ${name} — set ${skipFlag}=0 (default) and rerun setup`);
     }
     return v;
+}
+
+const reqSwap = (name: string): string => reqStep(name, "E2E_SKIP_SWAP");
+const reqYield = (name: string): string => reqStep(name, "E2E_SKIP_YIELD");
+
+/** One deployed yield asset, as the tests see it. */
+export interface YieldAssetEnv {
+    /** Yield asset id — the `asset` argument on every wallet method. */
+    id: bigint;
+    /** The ERC-20 underneath it, shared with the plain id it shadows. */
+    token: EvmAddress;
+    /** MockERC4626 the venue lends into; `earn`/`lose` move the index here. */
+    vault: EvmAddress;
+    /** ERC4626Venue the pool is bound to for this id. */
+    venue: EvmAddress;
 }
 
 export const env = {
@@ -49,13 +69,32 @@ export const env = {
     nativeAdapterAddress: opt("NATIVE_ADAPTER_ADDRESS"),
 
     // Present only when SWAP_ENABLED=true at deploy.
-    metaquoterUrl: () => reqSwap(() => opt("METAQUOTER_URL"), "METAQUOTER_URL"),
+    metaquoterUrl: () => reqSwap("METAQUOTER_URL"),
     swap: {
-        univ3Quoter: () => evmAddress(reqSwap(() => opt("UNIV3_QUOTER_ADDRESS"), "UNIV3_QUOTER_ADDRESS")),
-        univ3Adapter: () => evmAddress(reqSwap(() => opt("UNIV3_ADAPTER_ADDRESS"), "UNIV3_ADAPTER_ADDRESS")),
-        mockSwapRouter: () => evmAddress(reqSwap(() => opt("MOCK_SWAP_ROUTER_ADDRESS"), "MOCK_SWAP_ROUTER_ADDRESS")),
-        univ4Quoter: () => evmAddress(reqSwap(() => opt("UNIV4_QUOTER_ADDRESS"), "UNIV4_QUOTER_ADDRESS")),
-        univ4Adapter: () => evmAddress(reqSwap(() => opt("UNIV4_ADAPTER_ADDRESS"), "UNIV4_ADAPTER_ADDRESS")),
-        wrapper: () => evmAddress(reqSwap(() => opt("SWAP_WRAPPER_ADDRESS"), "SWAP_WRAPPER_ADDRESS")),
+        univ3Quoter: () => evmAddress(reqSwap("UNIV3_QUOTER_ADDRESS")),
+        univ3Adapter: () => evmAddress(reqSwap("UNIV3_ADAPTER_ADDRESS")),
+        mockSwapRouter: () => evmAddress(reqSwap("MOCK_SWAP_ROUTER_ADDRESS")),
+        univ4Quoter: () => evmAddress(reqSwap("UNIV4_QUOTER_ADDRESS")),
+        univ4Adapter: () => evmAddress(reqSwap("UNIV4_ADAPTER_ADDRESS")),
+        wrapper: () => evmAddress(reqSwap("SWAP_WRAPPER_ADDRESS")),
+    },
+
+    // Present only when the stack ran DeployTestYield (default; E2E_SKIP_YIELD=1
+    // turns it off).
+    yield: {
+        /** Every registered yield id, ascending. */
+        ids: (): bigint[] =>
+            reqYield("YIELD_ASSET_IDS")
+                .split(",")
+                .map(BigInt)
+                .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+
+        /** The triple registered under `id`. */
+        asset: (id: bigint): YieldAssetEnv => ({
+            id,
+            token: evmAddress(reqYield(`YIELD_TOKEN_${id}`)),
+            vault: evmAddress(reqYield(`YIELD_VAULT_${id}`)),
+            venue: evmAddress(reqYield(`YIELD_VENUE_${id}`)),
+        }),
     },
 };

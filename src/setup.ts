@@ -25,6 +25,7 @@ export default async function setup() {
     log("MASP =", addrs.masp);
     log("tokens =", addrs.tokens);
     log("swap =", addrs.swap);
+    log("yield =", addrs.yield);
 
     log("starting backend services…");
     const urls = await stack.upBackend(addrs);
@@ -116,5 +117,17 @@ function publishEnv(e: StackEnv): void {
     process.env.UNIV4_ADAPTER_ADDRESS = e.swap.univ4Adapter;
         process.env.MOCK_SWAP_ROUTER_ADDRESS = e.swap.mockSwapRouter;
         process.env.SWAP_WRAPPER_ADDRESS = e.swap.wrapper;
+    }
+    if (e.yield) {
+        // The id list is published alongside the addresses because the ids
+        // themselves are a deploy output — they come from the fixture and
+        // YIELD_ID_OFFSET, and a test that scanned process.env for the keys
+        // instead would silently see none when the deploy was skipped.
+        process.env.YIELD_ASSET_IDS = Object.keys(e.yield).join(",");
+        for (const [id, a] of Object.entries(e.yield)) {
+            process.env[`YIELD_TOKEN_${id}`] = a.token;
+            process.env[`YIELD_VAULT_${id}`] = a.vault;
+            process.env[`YIELD_VENUE_${id}`] = a.venue;
+        }
     }
 }
