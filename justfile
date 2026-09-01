@@ -30,21 +30,6 @@ up:
 deploy:
     cd "{{ROOT}}" && npm run deploy
 
-# Credit a yield asset's mock vault with interest, against a stack `just up` is
-# already holding. Nothing in the stack ever calls the mock's `earn`, so a
-# deployed yield asset sits at exactly RAY and every reader of it — the
-# explorer's `return` column included — honestly reports +0% forever.
-#
-# AMOUNT is whole tokens; the deployer mints itself the shortfall first, so no
-# funding step is needed. RPC_URL and MASP_ADDRESS come from the JSON `just up`
-# prints: the ports are testcontainers' and the addresses are the deploy's, so
-# neither can be defaulted here.
-#
-#   RPC_URL=... MASP_ADDRESS=... just earn 4 0.5
-[doc("Credit a yield asset's mock vault with interest (moves its index off RAY)")]
-earn ID AMOUNT *ARGS:
-    cd "{{ROOT}}" && npx tsx src/vault-cli.ts earn "{{ID}}" "{{AMOUNT}}" {{ARGS}}
-
 # Download the tree_update_batch artifacts (witness graph + zkey) the relayer's prover
 # reads. The version comes from node_modules/@lelantos-org/circuits/package.json.
 # Idempotent: skips when ./circuits/.version matches. Stack.up() also runs it.
