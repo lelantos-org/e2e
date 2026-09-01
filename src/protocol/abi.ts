@@ -100,6 +100,23 @@ export const MASP_YIELD_ABI = [
 ] as const;
 
 /**
+ * The pool's permissionless yield maintenance, as the suite drives it.
+ *
+ * Mutators, so they need a signer; kept out of {@link MASP_YIELD_ABI}, which
+ * every read reaches through a bare provider.
+ *
+ * `NormalizedFeeSwept` is the only place a sweep's two halves are observable
+ * together: `sweepNormalized` clears the accumulator, so the units it converted
+ * cannot be read back off `yieldState` afterwards, and its return value is
+ * unreachable from a transaction.
+ */
+export const MASP_YIELD_MAINT_ABI = [
+    "function accruePerf(uint64 id)",
+    "function sweepNormalized(uint64 id) returns (uint256)",
+    "event NormalizedFeeSwept(uint64 indexed assetId, uint256 units, uint256 amount)",
+] as const;
+
+/**
  * The venue leg of the pool's gross: what it currently holds at the vault.
  *
  * `VAULT` and `UNDERLYING` are the venue's immutables, which is what lets a

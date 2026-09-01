@@ -48,6 +48,7 @@ export const TEST_NSK = {
     edgeConcurrent: { alice: 0xed_a1ce_a11c0n, bob: 0xed_b0b_b0b00n },
     denominated:    { alice: 0xd0_a1ce_a11c0n },
     yieldWithdraw:  { alice: 0x71_a1ce_a11c0n },
+    yieldLiquidity: { alice: 0x72_a1ce_a11c0n },
 } as const;
 
 /**

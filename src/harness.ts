@@ -318,6 +318,9 @@ export {
     makeWallet, rngForOutput, snapshotBalances, trackedAddrs, waitForCm,
 } from "./scenario.js";
 export { expectRevert } from "./testkit/expect-revert.js";
+export {
+    expectPoolSettled, type Observed, observeYield,
+} from "./testkit/yield-ledger.js";
 export { cancelDepositAfterDelay } from "./testkit/cancel-deposit.js";
 export { feePaid } from "./testkit/spend-fee.js";
 export {
