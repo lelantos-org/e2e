@@ -24,6 +24,11 @@ export const MOCK_ERC20_ABI = [
     "function mint(address to, uint256 amount) public",
     "function approve(address spender, uint256 amount) public returns (bool)",
     "function balanceOf(address) view returns (uint256)",
+    // Read rather than assumed: the stack's yield assets are 18-decimal WETH
+    // and mDAI alongside 8-decimal mWBTC, so an amount typed in whole tokens
+    // cannot be scaled without asking.
+    "function decimals() view returns (uint8)",
+    "function symbol() view returns (string)",
 ] as const;
 
 export const MOCK_WETH9_ABI = [
@@ -94,7 +99,15 @@ export const MASP_YIELD_ABI = [
     "function yieldState(uint64 id) view returns ((address venue, uint16 bufferBps, uint16 perfBps, bool halted, uint256 totalNormalized, uint256 accruedFeeNormalized, uint256 idle, uint256 lastIdx, uint256 index))",
 ] as const;
 
-/** The venue leg of the pool's gross: what it currently holds at the vault. */
+/**
+ * The venue leg of the pool's gross: what it currently holds at the vault.
+ *
+ * `VAULT` and `UNDERLYING` are the venue's immutables, which is what lets a
+ * caller start from an asset id alone — `yieldState` names the venue, and the
+ * venue names the two addresses behind it. Nothing has to be passed in.
+ */
 export const YIELD_VENUE_ABI = [
     "function totalAssets() view returns (uint256)",
+    "function VAULT() view returns (address)",
+    "function UNDERLYING() view returns (address)",
 ] as const;
