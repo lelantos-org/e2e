@@ -140,6 +140,13 @@ jobs:
           path: /tmp/docker-images/explorer-indexer.tar
           key: img-explorer-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
 
+      - name: Cache image — protocol-indexer
+        id: cache-protocol-indexer
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/docker-images/protocol-indexer.tar
+          key: img-protocol-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
+
       - name: Cache image — fmd-webserver
         id: cache-fmd-webserver
         uses: actions/cache/restore@v4
@@ -173,6 +180,7 @@ jobs:
           HIT_INGESTER: ${{ steps.cache-ingester.outputs.cache-hit }}
           HIT_FMD_INDEXER: ${{ steps.cache-fmd-indexer.outputs.cache-hit }}
           HIT_EXPLORER_INDEXER: ${{ steps.cache-explorer-indexer.outputs.cache-hit }}
+          HIT_PROTOCOL_INDEXER: ${{ steps.cache-protocol-indexer.outputs.cache-hit }}
           HIT_FMD_WEBSERVER: ${{ steps.cache-fmd-webserver.outputs.cache-hit }}
           HIT_EXPLORER_WEBSERVER: ${{ steps.cache-explorer-webserver.outputs.cache-hit }}
           HIT_RELAYER: ${{ steps.cache-relayer.outputs.cache-hit }}
@@ -209,7 +217,8 @@ jobs:
           load_or_build ingester           "$HIT_INGESTER"           vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build fmd-indexer        "$HIT_FMD_INDEXER"        vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build explorer-indexer   "$HIT_EXPLORER_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build fmd-webserver      "$HIT_FMD_WEBSERVER"      vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build protocol-indexer   "$HIT_PROTOCOL_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
+          load_or_build fmd-webserver     "$HIT_FMD_WEBSERVER"      vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build explorer-webserver "$HIT_EXPLORER_WEBSERVER" vendor/backend/Dockerfile vendor/backend & pids+=($!)
           load_or_build metaquoter         "$HIT_METAQUOTER"         vendor/backend/Dockerfile vendor/backend & pids+=($!)
           fail=0
@@ -239,6 +248,13 @@ jobs:
         with:
           path: /tmp/docker-images/explorer-indexer.tar
           key: ${{ steps.cache-explorer-indexer.outputs.cache-primary-key }}
+
+      - name: Save image cache — protocol-indexer
+        if: steps.cache-protocol-indexer.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/docker-images/protocol-indexer.tar
+          key: ${{ steps.cache-protocol-indexer.outputs.cache-primary-key }}
 
       - name: Save image cache — fmd-webserver
         if: steps.cache-fmd-webserver.outputs.cache-hit != 'true'
@@ -270,7 +286,7 @@ jobs:
 
       - name: Verify image tags
         run: |
-          for img in ingester fmd-indexer explorer-indexer fmd-webserver explorer-webserver relayer metaquoter; do
+          for img in ingester fmd-indexer explorer-indexer protocol-indexer fmd-webserver explorer-webserver relayer metaquoter; do
             docker image inspect lelantos/$img:dev >/dev/null
           done
 
