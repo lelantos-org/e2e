@@ -13,7 +13,12 @@
 export const TIMEOUT = {
     POLL_DEFAULT_MS: 120_000,
     BATCH_FLUSH_MS: 150_000,
-    BALANCE_POLL_MS: 150_000,
+    /**
+     * A swap's output note lands on the next relayer flush tick; the relayer
+     * quarantines a deposit after five failed ticks, so waiting past a minute
+     * only delays the failure.
+     */
+    BALANCE_POLL_MS: 60_000,
     /**
      * How long to watch for a deposit's flush event. Spans several relayer
      * ticks (`flush_interval_s`), covering a deposit that narrowly missed one.
