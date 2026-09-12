@@ -81,6 +81,7 @@ export const ANVIL: ServiceSpec = {
 export interface BackendServices {
     ingester: ServiceSpec;
     fmdIndexer: ServiceSpec;
+    protocolIndexer: ServiceSpec;
     explorerIndexer: ServiceSpec;
     fmdWeb: ServiceSpec;
     explorerWeb: ServiceSpec;
@@ -146,9 +147,24 @@ export function backendSpecs({
             // declare the container up before it has a database connection.
             wait: Wait.forLogMessage(/fmd-indexer ready/),
         },
+        protocolIndexer: {
+            image: "lelantos/protocol-indexer:dev",
+            alias: "protocol-indexer",
+            env: {
+                ...BASE_RUST_ENV,
+                PROTOCOL_INDEXER_CONFIG: "/etc/protocol-indexer.toml",
+                [`PROTOCOL_INDEXER_CHAIN_${CHAIN_ID}_RPC_URL`]: ANVIL_RPC_INTERNAL,
+            },
+            mounts: [{ configFile: "protocol-indexer.toml", target: "/etc/protocol-indexer.toml" }],
+            // `crates/protocol-indexer/src/main.rs`, after the pool is built.
+            // Owns the asset catalog and the yield-state poller, so nothing can
+            // be quoted until it has run: see `registry-ready.ts`.
+            wait: Wait.forLogMessage(/protocol-indexer ready/),
+        },
         explorerIndexer: {
             image: "lelantos/explorer-indexer:dev",
             alias: "explorer-indexer",
+            // Flow analytics only; it reads no chain and needs no RPC.
             env: { ...BASE_RUST_ENV, EXPLORER_INDEXER_CONFIG: "/etc/explorer-indexer.toml" },
             mounts: [{ configFile: "explorer-indexer.toml", target: "/etc/explorer-indexer.toml" }],
             // `crates/explorer-indexer/src/main.rs`, after the pool is built.

@@ -132,15 +132,30 @@ export class Stack {
 
         await start(specs.ingester);
 
-        const rest = [
-            specs.fmdIndexer,
-            specs.explorerIndexer,
-            specs.fmdWeb,
-            specs.explorerWeb,
-            specs.relayer,
-            ...(specs.metaquoter ? [specs.metaquoter] : []),
-        ];
-        const [, , fmdWeb, explorerWeb, relayer, metaquoter] = await Promise.all(rest.map(start));
+        // Keyed rather than positional: the destructuring this replaced
+        // silently rebound every url when a service was added to the list.
+        const rest = {
+            fmdIndexer: specs.fmdIndexer,
+            protocolIndexer: specs.protocolIndexer,
+            explorerIndexer: specs.explorerIndexer,
+            fmdWeb: specs.fmdWeb,
+            explorerWeb: specs.explorerWeb,
+            relayer: specs.relayer,
+            ...(specs.metaquoter ? { metaquoter: specs.metaquoter } : {}),
+        };
+        const entries = Object.entries(rest);
+        const started = new Map(
+            await Promise.all(
+                entries.map(
+                    async ([k, spec]) =>
+                        [k, await start(spec)] as const,
+                ),
+            ),
+        );
+        const fmdWeb = started.get("fmdWeb")!;
+        const explorerWeb = started.get("explorerWeb")!;
+        const relayer = started.get("relayer")!;
+        const metaquoter = started.get("metaquoter");
 
         return {
             rpc: this.rpcUrl(),

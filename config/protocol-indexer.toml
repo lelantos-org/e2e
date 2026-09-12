@@ -1,0 +1,34 @@
+# Protocol indexer config. Mounted at /etc/protocol-indexer.toml in the
+# container. chain_id matches anvil's `--chain-id=31337`.
+#
+# Owns everything the wallet boots from and the relayer transacts against: the
+# asset catalog, the yield bindings and their polled index, `tree_advances` for
+# the relayer's Merkle mirror, and `deposit_escrowed_events` for its flush
+# pipeline. Split out of `explorer-indexer`, which now keeps only the flow
+# analytics that read no chain.
+#
+# The chain's RPC. Not optional, despite the event pipeline needing none: the
+# yield-state poller reads `gross`, `totalNormalized` and the index off the pool
+# over RPC, because they move with the venue on every block and no event carries
+# them. Without a reader for this chain that half of `asset_yield` stays NULL,
+# the relayer declines to price a unit it cannot value, and every yield asset is
+# quoted no deposit fee — which surfaces test-side as "the relayer charges to
+# flush deposits but quoted no amount for asset 4". ERC20 `decimals()` and
+# `symbol()` enrichment rides on the same URL.
+#
+# The key is `chains`/`rpc_url`, as `ProtocolIndexerConfig` names them. A
+# misspelt table is silently no chains at all: the struct takes
+# `#[serde(default)]` on `chains`.
+
+database_url = "postgres://postgres:postgres@postgres:5432/postgres"
+
+# Tight so the indexer keeps up with anvil's 1s blocks.
+tick_ms = 500
+batch = 500
+
+# Keep [[chains]] last: in TOML every bare key after a table header belongs to
+# that table, so a scalar moved below this line would join the chain entry.
+[[chains]]
+chain_id = 31337
+# Overridden by PROTOCOL_INDEXER_CHAIN_31337_RPC_URL.
+rpc_url = "http://anvil:8545"
