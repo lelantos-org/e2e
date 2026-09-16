@@ -221,6 +221,9 @@ jobs:
         run: npm run typecheck
 
       - name: Run e2e shard
+        # Below the job's 45 minutes: a step timeout is a failure, so the log
+        # steps below still run and upload what the stack was doing.
+        timeout-minutes: 38
         env:
           E2E_LOG_DIR: /tmp/e2e-logs
           E2E_JUNIT_FILE: test-results-${{ matrix.shard }}.xml
@@ -233,7 +236,7 @@ jobs:
           npx vitest run "${files[@]}"
 
       - name: Collect leftover container state on failure
-        if: failure()
+        if: failure() || cancelled()
         run: |
           mkdir -p /tmp/e2e-logs
           docker ps -a > /tmp/e2e-logs/ps.txt 2>&1 || true
@@ -243,7 +246,7 @@ jobs:
           done
 
       - name: Upload logs artifact
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-container-logs-shard-${{ matrix.shard }}

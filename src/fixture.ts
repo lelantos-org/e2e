@@ -4,6 +4,7 @@
 
 import type { AssetId, WalletApi } from "@lelantos-org/sdk";
 import type { Field } from "@lelantos-org/sdk/primitives";
+import { expect } from "vitest";
 
 import { fundPayerForAsset, setupHarness, type Harness } from "./harness.js";
 import type { Erc20Helpers } from "./scenario.js";
@@ -31,10 +32,32 @@ export type SdkWallet = WalletApi;
  *
  * A rejection is cached and re-thrown to every caller, so a failed setup step
  * is not silently retried by the next `it` and half-succeed.
+ *
+ * A step still pending when a *different* `it` asks for it was abandoned by an
+ * earlier test that timed out: that caller fails at once instead of waiting on
+ * the same stuck work for its own full budget. Callers within one `it` (stages
+ * awaiting a shared prefix in parallel) still share the pending promise.
  */
 export function once<T>(fn: () => Promise<T>): () => Promise<T> {
     let p: Promise<T> | undefined;
-    return () => (p ??= fn());
+    let settled = false;
+    let startedIn: string | undefined;
+    return () => {
+        if (p === undefined) {
+            startedIn = expect.getState().currentTestName;
+            p = fn().finally(() => {
+                settled = true;
+            });
+            return p;
+        }
+        const caller = expect.getState().currentTestName;
+        if (!settled && caller !== startedIn) {
+            return Promise.reject(
+                new Error(`step started in "${startedIn ?? "a hook"}" is still pending; that test timed out`),
+            );
+        }
+        return p;
+    };
 }
 
 /**
