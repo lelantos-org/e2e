@@ -18,33 +18,170 @@ concurrency:
 permissions:
   contents: read
 
-jobs:
-  e2e:
-    name: E2E (single job)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+env:
+  # The eight backend images the stack runs (`src/services.ts`), tagged
+  # `lelantos/<name>:dev` as the suite expects.
+  BACKEND_IMAGES: ingester fmd-indexer explorer-indexer protocol-indexer fmd-webserver explorer-webserver relayer metaquoter
+  # Where the backend repository's Docker workflow publishes them, one tag per
+  # image and commit: `<name>-sha-<short sha>`.
+  BACKEND_REGISTRY: ghcr.io/lelantos-org/backend
+  IMAGES_TAR: /tmp/backend-images.tar
+  SHARDS: 4
 
-    env:
-      CIRCUITS_RELEASE: v0.16.0
+jobs:
+  # Produces the backend images once per `vendor/backend` commit and caches them
+  # as one tar, which every test shard restores. In order of preference: the
+  # tar is already cached (nothing to do), the backend's own CI published the
+  # images for this commit (pull, seconds), or neither (build, the slow path).
+  images:
+    name: Backend images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      key: ${{ steps.key.outputs.key }}
 
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          docker system prune -af || true
-          df -h
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
 
-      - name: Init submodules (HTTPS via token)
+      - name: Init backend submodule (HTTPS via token)
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
-          git submodule update --init --recursive --depth=1
+          git submodule update --init --depth=1 vendor/backend
+
+      - name: Cache key
+        id: key
+        run: |
+          set -euo pipefail
+          sha=$(git -C vendor/backend rev-parse HEAD)
+          be_df=$(sha256sum vendor/backend/Dockerfile | cut -c1-12)
+          rl_df=$(sha256sum vendor/backend/crates/relayer/Dockerfile | cut -c1-12)
+          {
+            echo "sha=$sha"
+            echo "short=$(git -C vendor/backend rev-parse --short=7 HEAD)"
+            echo "key=backend-images-v2-${{ runner.os }}-${sha}-${be_df}-${rl_df}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Look up cached images
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.IMAGES_TAR }}
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
+      - name: Pull images published by the backend CI
+        id: pull
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+          SHORT: ${{ steps.key.outputs.short }}
+        run: |
+          set -uo pipefail
+          missing=()
+          if ! echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin; then
+            echo "::warning::could not log in to ghcr.io; building every image"
+            read -ra missing <<< "$BACKEND_IMAGES"
+          else
+            for img in $BACKEND_IMAGES; do
+              ref="$BACKEND_REGISTRY:$img-sha-$SHORT"
+              if docker pull --quiet "$ref"; then
+                docker tag "$ref" "lelantos/$img:dev"
+              else
+                echo "::notice::$ref not published; will build it"
+                missing+=("$img")
+              fi
+            done
+          fi
+          echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        if: steps.cache.outputs.cache-hit != 'true' && steps.pull.outputs.missing != ''
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Setup Docker buildx
+        if: steps.cache.outputs.cache-hit != 'true' && steps.pull.outputs.missing != ''
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build unpublished images
+        if: steps.cache.outputs.cache-hit != 'true' && steps.pull.outputs.missing != ''
+        env:
+          MISSING: ${{ steps.pull.outputs.missing }}
+        run: |
+          set -euo pipefail
+          build() {
+            local pkg="$1" df ctx args=()
+            if [[ "$pkg" == relayer ]]; then
+              df=vendor/backend/crates/relayer/Dockerfile; ctx=vendor
+            else
+              df=vendor/backend/Dockerfile; ctx=vendor/backend; args=(--build-arg "PACKAGE=$pkg")
+            fi
+            echo "==> Building lelantos/$pkg:dev"
+            docker buildx build --load "${args[@]}" -f "$df" -t "lelantos/$pkg:dev" \
+              --cache-from "type=gha,scope=$pkg" --cache-to "type=gha,scope=$pkg,mode=max" "$ctx"
+          }
+          # The relayer's context is `vendor/`, but its Dockerfile copies only
+          # `backend/`: circuits are mounted into the container at run time.
+          pids=()
+          for pkg in $MISSING; do build "$pkg" & pids+=($!); done
+          fail=0
+          for pid in "${pids[@]}"; do wait "$pid" || fail=1; done
+          [[ $fail -eq 0 ]]
+
+      - name: Save images
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          refs=()
+          for img in $BACKEND_IMAGES; do
+            docker image inspect "lelantos/$img:dev" > /dev/null
+            refs+=("lelantos/$img:dev")
+          done
+          # One tar: the images share base layers, which `docker save` stores once.
+          docker save "${refs[@]}" -o "$IMAGES_TAR"
+          ls -lh "$IMAGES_TAR"
+
+      - name: Cache images
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.IMAGES_TAR }}
+          key: ${{ steps.key.outputs.key }}
+
+  # The suite split across parallel jobs, each with its own stack. Files are
+  # packed by measured duration (`scripts/ci-shard.mjs`, `ci/test-timings.json`).
+  test:
+    name: E2E shard ${{ matrix.shard }}
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in step with `env.SHARDS`.
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+
+      # Only the contracts: forge deploys them from `vendor/contracts`. The
+      # images come prebuilt and the circuits from their GitHub release.
+      - name: Init contracts submodule (HTTPS via token)
+        env:
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive --depth=1 vendor/contracts
 
       - name: Setup Node 24
         uses: actions/setup-node@v4
@@ -54,241 +191,25 @@ jobs:
           cache-dependency-path: |
             package-lock.json
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Setup Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.8.1
 
-      - name: Install just
-        uses: extractions/setup-just@v2
-
-      - name: Cache cargo (backend)
-        uses: Swatinem/rust-cache@v2
+      - name: Restore images
+        uses: actions/cache/restore@v4
         with:
-          workspaces: vendor/backend
+          path: ${{ env.IMAGES_TAR }}
+          key: ${{ needs.images.outputs.key }}
+          fail-on-cache-miss: true
 
-      - name: Fetch circuit artifacts
-        env:
-          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-        run: |
-          mkdir -p vendor/circuits/build/4x6_js vendor/circuits/build/tree_update_batch_js
-          gh release download "$CIRCUITS_RELEASE" \
-            --repo lelantos-org/circuits \
-            --pattern '4x6.wasm' \
-            --pattern '4x6.r1cs' \
-            --pattern '4x6_final.zkey' \
-            --pattern 'tree_update_batch.wasm' \
-            --pattern 'tree_update_batch.r1cs' \
-            --pattern 'tree_update_batch_final.zkey' \
-            --dir vendor/circuits/build
-          mv vendor/circuits/build/4x6.wasm vendor/circuits/build/4x6_js/4x6.wasm
-          mv vendor/circuits/build/tree_update_batch.wasm vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
-
-      - name: Verify circuit artifacts
-        run: |
-          test -f vendor/circuits/build/4x6_final.zkey
-          test -f vendor/circuits/build/4x6.r1cs
-          test -f vendor/circuits/build/4x6_js/4x6.wasm
-          test -f vendor/circuits/build/tree_update_batch_final.zkey
-          test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
-          test -f vendor/circuits/build/tree_update_batch.r1cs
-
-      - name: Compute zkey content hashes
-        id: zkey-hashes
+      - name: Load images
         run: |
           set -euo pipefail
-          tree_sha=$(sha256sum vendor/circuits/build/tree_update_batch_final.zkey | cut -d' ' -f1)
-          pair_sha=$(sha256sum vendor/circuits/build/4x6_final.zkey | cut -d' ' -f1)
-          echo "tree_zkey_sha=$tree_sha" >> "$GITHUB_OUTPUT"
-          echo "pair_zkey_sha=$pair_sha" >> "$GITHUB_OUTPUT"
-          echo "tree_update_batch_final.zkey = $tree_sha"
-          echo "4x6_final.zkey               = $pair_sha"
-
-      - name: Setup Docker buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Resolve submodule SHAs once; use as per-image cache keys.
-      - name: Resolve submodule SHAs
-        id: shas
-        run: |
-          echo "backend=$(git -C vendor/backend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "circuits=$(git -C vendor/circuits rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "be_dockerfile=$(sha256sum vendor/backend/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "rl_dockerfile=$(sha256sum vendor/backend/crates/relayer/Dockerfile | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache image — ingester
-        id: cache-ingester
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/ingester.tar
-          key: img-ingester-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — fmd-indexer
-        id: cache-fmd-indexer
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/fmd-indexer.tar
-          key: img-fmd-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — explorer-indexer
-        id: cache-explorer-indexer
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/explorer-indexer.tar
-          key: img-explorer-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — protocol-indexer
-        id: cache-protocol-indexer
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/protocol-indexer.tar
-          key: img-protocol-indexer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — fmd-webserver
-        id: cache-fmd-webserver
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/fmd-webserver.tar
-          key: img-fmd-webserver-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — explorer-webserver
-        id: cache-explorer-webserver
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/explorer-webserver.tar
-          key: img-explorer-webserver-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Cache image — relayer
-        id: cache-relayer
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/relayer.tar
-          key: img-relayer-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.zkey-hashes.outputs.tree_zkey_sha }}-${{ steps.zkey-hashes.outputs.pair_zkey_sha }}-${{ steps.shas.outputs.rl_dockerfile }}
-
-      - name: Cache image — metaquoter
-        id: cache-metaquoter
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/docker-images/metaquoter.tar
-          key: img-metaquoter-${{ runner.os }}-${{ steps.shas.outputs.backend }}-${{ steps.shas.outputs.be_dockerfile }}
-
-      - name: Build / load images
-        env:
-          HIT_INGESTER: ${{ steps.cache-ingester.outputs.cache-hit }}
-          HIT_FMD_INDEXER: ${{ steps.cache-fmd-indexer.outputs.cache-hit }}
-          HIT_EXPLORER_INDEXER: ${{ steps.cache-explorer-indexer.outputs.cache-hit }}
-          HIT_PROTOCOL_INDEXER: ${{ steps.cache-protocol-indexer.outputs.cache-hit }}
-          HIT_FMD_WEBSERVER: ${{ steps.cache-fmd-webserver.outputs.cache-hit }}
-          HIT_EXPLORER_WEBSERVER: ${{ steps.cache-explorer-webserver.outputs.cache-hit }}
-          HIT_RELAYER: ${{ steps.cache-relayer.outputs.cache-hit }}
-          HIT_METAQUOTER: ${{ steps.cache-metaquoter.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/docker-images
-
-          load_or_build() {
-            local pkg="$1" hit="$2" df="$3" ctx="$4"
-            local tar="/tmp/docker-images/${pkg}.tar"
-            if [[ "$hit" == "true" ]]; then
-              echo "==> Loading cached lelantos/$pkg:dev"
-              docker load -i "$tar"
-              return
-            fi
-            echo "==> Building lelantos/$pkg:dev"
-            local build_args=()
-            if [[ "$df" == "vendor/backend/Dockerfile" ]]; then
-              build_args=(--build-arg "PACKAGE=$pkg")
-            fi
-            docker buildx build --load \
-              "${build_args[@]}" \
-              -f "$df" \
-              -t "lelantos/$pkg:dev" \
-              --cache-from "type=gha,scope=$pkg" \
-              --cache-to   "type=gha,scope=$pkg,mode=max" \
-              "$ctx"
-            docker save "lelantos/$pkg:dev" -o "$tar"
-          }
-
-          # Backend-only services in parallel.
-          pids=()
-          load_or_build ingester           "$HIT_INGESTER"           vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build fmd-indexer        "$HIT_FMD_INDEXER"        vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build explorer-indexer   "$HIT_EXPLORER_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build protocol-indexer   "$HIT_PROTOCOL_INDEXER"   vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build fmd-webserver     "$HIT_FMD_WEBSERVER"      vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build explorer-webserver "$HIT_EXPLORER_WEBSERVER" vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          load_or_build metaquoter         "$HIT_METAQUOTER"         vendor/backend/Dockerfile vendor/backend & pids+=($!)
-          fail=0
-          for pid in "${pids[@]}"; do wait "$pid" || fail=1; done
-          [[ $fail -eq 0 ]]
-
-          # Relayer (different Dockerfile + context).
-          load_or_build relayer "$HIT_RELAYER" vendor/backend/crates/relayer/Dockerfile vendor
-
-      - name: Save image cache — ingester
-        if: steps.cache-ingester.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/ingester.tar
-          key: ${{ steps.cache-ingester.outputs.cache-primary-key }}
-
-      - name: Save image cache — fmd-indexer
-        if: steps.cache-fmd-indexer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/fmd-indexer.tar
-          key: ${{ steps.cache-fmd-indexer.outputs.cache-primary-key }}
-
-      - name: Save image cache — explorer-indexer
-        if: steps.cache-explorer-indexer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/explorer-indexer.tar
-          key: ${{ steps.cache-explorer-indexer.outputs.cache-primary-key }}
-
-      - name: Save image cache — protocol-indexer
-        if: steps.cache-protocol-indexer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/protocol-indexer.tar
-          key: ${{ steps.cache-protocol-indexer.outputs.cache-primary-key }}
-
-      - name: Save image cache — fmd-webserver
-        if: steps.cache-fmd-webserver.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/fmd-webserver.tar
-          key: ${{ steps.cache-fmd-webserver.outputs.cache-primary-key }}
-
-      - name: Save image cache — metaquoter
-        if: steps.cache-metaquoter.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/metaquoter.tar
-          key: ${{ steps.cache-metaquoter.outputs.cache-primary-key }}
-
-      - name: Save image cache — explorer-webserver
-        if: steps.cache-explorer-webserver.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/explorer-webserver.tar
-          key: ${{ steps.cache-explorer-webserver.outputs.cache-primary-key }}
-
-      - name: Save image cache — relayer
-        if: steps.cache-relayer.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/docker-images/relayer.tar
-          key: ${{ steps.cache-relayer.outputs.cache-primary-key }}
-
-      - name: Verify image tags
-        run: |
-          for img in ingester fmd-indexer explorer-indexer protocol-indexer fmd-webserver explorer-webserver relayer metaquoter; do
-            docker image inspect lelantos/$img:dev >/dev/null
-          done
+          docker load -i "$IMAGES_TAR"
+          rm -f "$IMAGES_TAR"
+          for img in $BACKEND_IMAGES; do docker image inspect "lelantos/$img:dev" > /dev/null; done
+          df -h /
 
       - name: Install e2e deps
         env:
@@ -296,12 +217,20 @@ jobs:
         run: npm ci
 
       - name: Typecheck
+        if: matrix.shard == 1
         run: npm run typecheck
 
-      - name: Run e2e
+      - name: Run e2e shard
         env:
           E2E_LOG_DIR: /tmp/e2e-logs
-        run: npm test
+          E2E_JUNIT_FILE: test-results-${{ matrix.shard }}.xml
+          # `scripts/fetch-circuits.sh` downloads the relayer's artifacts at boot.
+          GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+        run: |
+          set -euo pipefail
+          read -ra files <<< "$(node scripts/ci-shard.mjs ${{ matrix.shard }} "$SHARDS")"
+          printf '%s\n' "${files[@]}"
+          npx vitest run "${files[@]}"
 
       - name: Collect leftover container state on failure
         if: failure()
@@ -317,7 +246,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-container-logs
+          name: e2e-container-logs-shard-${{ matrix.shard }}
           path: /tmp/e2e-logs
           if-no-files-found: ignore
           retention-days: 7
@@ -326,7 +255,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-results
-          path: test-results.xml
+          name: e2e-test-results-shard-${{ matrix.shard }}
+          path: test-results-${{ matrix.shard }}.xml
           if-no-files-found: ignore
           retention-days: 7
+
+  # One status for branch protection, under the name the single-job workflow
+  # used, so an existing required check keeps matching.
+  e2e:
+    name: E2E (single job)
+    needs: [images, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All shards passed
+        env:
+          IMAGES: ${{ needs.images.result }}
+          SHARDS_RESULT: ${{ needs.test.result }}
+        run: |
+          echo "images: $IMAGES, shards: $SHARDS_RESULT"
+          test "$IMAGES" = success
+          test "$SHARDS_RESULT" = success

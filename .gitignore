@@ -6,3 +6,6 @@ circuits/
 
 # Configs rendered at stack boot (see src/infra/relayer-config.ts).
 .rendered/
+
+# JUnit reports vitest writes under CI (one per shard: `E2E_JUNIT_FILE`).
+test-results*.xml

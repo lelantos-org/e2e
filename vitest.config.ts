@@ -28,8 +28,10 @@ export default defineConfig({
         // Per-file teardown: release the wallets that file built. Runs inside
         // the fork, unlike `globalSetup`.
         setupFiles: ["./src/test-setup.ts"],
+        // CI runs the suite as parallel shards, each writing its own report
+        // (`E2E_JUNIT_FILE`) so the uploaded artifacts do not overwrite each other.
         reporters: process.env.CI
-            ? ["verbose", ["junit", { outputFile: "./test-results.xml" }]]
+            ? ["verbose", ["junit", { outputFile: process.env.E2E_JUNIT_FILE ?? "./test-results.xml" }]]
             : ["verbose"],
     },
 });

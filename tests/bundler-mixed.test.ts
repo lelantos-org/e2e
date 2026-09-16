@@ -117,6 +117,13 @@ const TO_BOB = 10n;
 const WITHDRAW = 10n;
 const DEPOSIT_WETH = 20n;
 const WITHDRAW_WETH = 8n;
+/**
+ * Gas for a hand-sent `Bundler.execute` of one spend. A bundled transfer uses
+ * roughly 0.65–1.2M on this stack; the ceiling leaves room without reaching the
+ * block limit (anvil runs with `--gas-limit=5000000000`).
+ */
+const ITEM_GAS_LIMIT = 5_000_000n;
+
 /** One direct deposit's principal, for the flush the mixed bundle carries. */
 const FLUSHED = 10n;
 /** How many direct deposits the mixed bundle's flush is offered. */
@@ -734,7 +741,16 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
         const call = { target: env.maspAddress, data: await transferCalldata(payload) };
 
         const other = new ethers.Contract(otherAddress, BUNDLER_ABI, owner);
-        const receipt = (await (await other.execute([call])).wait()) as ethers.TransactionReceipt;
+        // An explicit limit, not ethers' estimate. `Bundler.execute` never
+        // reverts when an item fails — it records `BundleItemFailed` and
+        // returns — so `eth_estimateGas` converges on the least gas at which
+        // the *outer* call succeeds, which starves the item: it then fails as
+        // `ItemOutOfGas` before the pool reaches the relayer-binding check this
+        // case is about. The relayer has the same blind spot and handles it by
+        // doubling the limit on `ItemOutOfGas`; a transfer here uses well under
+        // this ceiling.
+        const receipt = (await (await other.execute([call], { gasLimit: ITEM_GAS_LIMIT })).wait()) as
+            ethers.TransactionReceipt;
         const outcome = bundleOutcome(receipt, otherAddress);
         expect({ executed: outcome.executed, total: outcome.total }).toEqual({ executed: 0n, total: 1n });
         expect(errorText(Object.assign(new Error("BundleItemFailed"), { data: outcome.failed?.reason })))

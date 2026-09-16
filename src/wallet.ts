@@ -73,6 +73,7 @@ export const TEST_NSK = {
     withdrawNative: { alice: 0xee_a1ce_a11c0n },
     depositNative:  { alice: 0xde_a1ce_a11c0n },
     depositFeeAsset: { alice: 0xfa_a1ce_a11c0n },
+    depositFeePairs: { alice: 0xfb_a1ce_a11c0n },
     batchFlush:     { alice: 0xbf_a1ce_a11c0n },
     swap:           { alice: 0x55_a1ce_a11c0n },
     submitRetry:    { alice: 0x51_a1ce_a11c0n, bob: 0x51_b0b_b0b00n },
