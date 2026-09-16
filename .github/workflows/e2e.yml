@@ -159,7 +159,7 @@ jobs:
     name: E2E shard ${{ matrix.shard }}
     needs: images
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -229,6 +229,15 @@ jobs:
           E2E_JUNIT_FILE: test-results-${{ matrix.shard }}.xml
           # `scripts/fetch-circuits.sh` downloads the relayer's artifacts at boot.
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+          # The SDK's WASM prover proves synchronously on the main thread while
+          # its rayon pool does the work. On these runners the pool intermittently
+          # never answers: the transfer stalls after its fee quote, the event loop
+          # stays blocked, and no vitest timeout can fire. One thread skips the
+          # pool entirely.
+          LELANTOS_PROVER_THREADS: "1"
+          # Logs each rayon worker's lifecycle (init, ready, start, errors) to
+          # stderr, so a pool that stops answering leaves a trace in the job log.
+          LELANTOS_DEBUG: "1"
         run: |
           set -euo pipefail
           read -ra files <<< "$(node scripts/ci-shard.mjs ${{ matrix.shard }} ${{ strategy.job-total }})"
