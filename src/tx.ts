@@ -106,3 +106,25 @@ export async function settleNonce(
     }, { label: `nonce settle(${address.slice(0, 10)})`, timeoutMs: 30_000, intervalMs: 250 });
     return nonce;
 }
+
+/**
+ * Mine `blocks` blocks on anvil; a no-op on a chain without `anvil_mine`.
+ *
+ * Only "method not found" means "not anvil". Anything else — anvil down, a
+ * refused connection — is rethrown: swallowing it would turn a dead chain into
+ * a later, unrelated-looking timeout.
+ */
+export async function mineIfAnvil(provider: ethers.JsonRpcProvider, blocks: number): Promise<void> {
+    try {
+        await provider.send("anvil_mine", [ethers.toQuantity(blocks)]);
+    } catch (e) {
+        if (!isMethodNotFound(e)) throw e;
+    }
+}
+
+function isMethodNotFound(e: unknown): boolean {
+    const err = e as { error?: { code?: unknown }; info?: { error?: { code?: unknown } }; message?: unknown };
+    const code = err?.error?.code ?? err?.info?.error?.code;
+    if (code === -32601) return true;
+    return typeof err?.message === "string" && /method not found|not supported|unsupported method/i.test(err.message);
+}

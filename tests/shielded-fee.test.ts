@@ -9,8 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
-import { buildSpendingKey, encodeAddress } from "@lelantos-org/sdk/keys";
+import { buildSpendingKey, encodeAddress, Jubjub, Poseidon } from "@lelantos-org/sdk/primitives";
 
 import {
     RELAYER_FEE_ADDRESS,

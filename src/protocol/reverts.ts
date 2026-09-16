@@ -29,15 +29,14 @@ export const REVERT = {
      * rejects with `AppError::NullifierAlreadySpent` (HTTP 409) as soon as it
      * has seen the first spend, and only a request that gets past it reaches
      * the pool's `NullifierSet.DoubleSpend()`.
+     *
+     * Only the relayer's refusal is a `RELAYER_REJECTED` wallet error; a replay
+     * that got past it fails inside a landed bundle and is not guaranteed to
+     * surface under that code. A test that also pins `code: "RELAYER_REJECTED"`
+     * is asserting the relayer layer, which holds only when the first spend was
+     * confirmed before the replay was submitted.
      */
     NULLIFIER_SPENT: /nullifier already spent|DoubleSpend/,
-    /**
-     * The loser of a race between two spends of one note. The same guard as
-     * above, but the winner is not yet indexed, so the relayer reports the
-     * nullifier as in flight rather than spent. Which state appears depends on
-     * how far the loser got.
-     */
-    NULLIFIER_CONTESTED: /nullifier in flight|nullifier already spent|DoubleSpend/,
     /**
      * Permit2 `InvalidAmount(uint256)` — requestedAmount exceeds the signed
      * `permitted.amount`, which the harness passes as `sig.maxTotal`.
@@ -53,12 +52,19 @@ export const REVERT = {
      */
     ADAPTER_NOT_ALLOWED: /AdapterNotAllowed/,
     /**
-     * The router rejects first: `UniV3Adapter` forwards `minOut` as
-     * `amountOutMinimum`, so `MockSwapRouter02`'s require trips before
-     * `SwapWrapper.InsufficientOut` is reached. Matching the wrapper's error
-     * here would never fire.
+     * `MASP.BadRelayer()` — the spend's `pi.relayer` is not the pool's caller.
+     * With bundling the caller is a `Bundler`, so this is a proof bound to one
+     * relayer's Bundler submitted through another's.
      */
-    SWAP_UNDER_MIN_OUT: /too little received/,
+    BAD_RELAYER: /BadRelayer/,
+    /**
+     * The loser of a race inside one bundling window, from a wallet that does
+     * not share the winner's note leases. The relayer's nullifier guard answers
+     * at enqueue, before anything reaches the chain, so unlike
+     * {@link REVERT.NULLIFIER_SPENT} the pool's `DoubleSpend` is not an
+     * accepted outcome.
+     */
+    NULLIFIER_REJECTED_AT_ENQUEUE: /nullifier in flight|nullifier already spent/,
 } as const;
 
 // Revert selectors mapped to readable names, so `expectRevert` patterns can
@@ -76,14 +82,26 @@ const KNOWN_ERROR_SIGNATURES = [
     // MASP
     "MustHaveDeposit()",
     "AmountOverflowsAllowance()",
+    // A spend's anchor: `SpendTree.anchorIndex` does not hold `pi.merkleRoot`.
     "UnknownRoot()",
+    "BadRelayer()",
+    // `flushBatch` only; a spend at a stale tree position is `BatchMisaligned`.
+    "StaleOldRoot()",
+    "BatchMisaligned()",
+    "ProofRejected()",
+    // Bundler
+    "CallNotAllowed(uint256)",
+    "MalformedCall(uint256)",
     // NullifierSet
     "DoubleSpend()",
     "DuplicateNullifier()",
     // SwapWrapper
     "AdapterNotAllowed()",
     "InsufficientOut(uint256,uint256)",
-    "MaspPullBelowMinOut(uint256,uint256)",
+    // MaspEscrowSatellite: the pool pulled outside the bounds the swap escrowed
+    // against, which is what stops one swap's escrow reaching another's refund.
+    "PullBelowMin(uint256,uint256)",
+    "PullExceedsMax(uint256,uint256)",
 ] as const;
 
 const KNOWN_SELECTORS: Record<string, string> = Object.fromEntries(

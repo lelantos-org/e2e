@@ -7,7 +7,8 @@
 // Neither may cache nonces locally: both send from the same account, so a
 // local counter diverges from chain state. See `tx.ts`.
 
-import { type EthSigner, PrivateKeySigner } from "@lelantos-org/sdk";
+import type { EthSigner } from "@lelantos-org/sdk";
+import { PrivateKeySigner } from "@lelantos-org/sdk/advanced";
 import type { Hex } from "viem";
 
 import { env } from "./env.js";

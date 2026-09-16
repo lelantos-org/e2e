@@ -7,6 +7,7 @@ import {
     expectRelayerPaid,
     awaitRecipient,
     createTestWallet,
+    shieldedBalance,
     SYNC_LIMIT,
     TEST_NSK,
     TEST_TIMEOUT,
@@ -20,6 +21,11 @@ const DEPOSIT_2 = amt(50n);
 const TO_BOB_1 = amt(30n);
 const TO_BOB_2 = amt(20n);
 const EXPECTED_BOB_TOTAL = TO_BOB_1 + TO_BOB_2;
+/**
+ * `activity`, which every `it` pulls in: two deposits and two transfers, each
+ * transfer awaited on both sides and its relayer fee confirmed.
+ */
+const ACTIVITY_TIMEOUT = 2 * TEST_TIMEOUT.DEPOSIT + 2 * TEST_TIMEOUT.SPEND;
 
 describe("cold-client resync", () => {
     let alice: SdkWallet;
@@ -38,21 +44,21 @@ describe("cold-client resync", () => {
     const activity = once(async () => {
         const d1 = await alice.deposit({ amount: DEPOSIT_1, asset: ASSET });
         await awaitOwn(alice, d1);
-        const afterD1 = alice.balance(ASSET);
+        const afterD1 = await shieldedBalance(alice, ASSET);
 
-        const t1 = await alice.transfer({ to: bob.address, amount: TO_BOB_1, asset: ASSET });
+        const t1 = await alice.transfer({ recipient: bob.address, amount: TO_BOB_1, asset: ASSET });
         await awaitOwn(alice, t1);
         await awaitRecipient(bob, t1);
-        const afterT1 = alice.balance(ASSET);
+        const afterT1 = await shieldedBalance(alice, ASSET);
 
         const d2 = await alice.deposit({ amount: DEPOSIT_2, asset: ASSET });
         await awaitOwn(alice, d2);
-        const afterD2 = alice.balance(ASSET);
+        const afterD2 = await shieldedBalance(alice, ASSET);
 
-        const t2 = await alice.transfer({ to: bob.address, amount: TO_BOB_2, asset: ASSET });
+        const t2 = await alice.transfer({ recipient: bob.address, amount: TO_BOB_2, asset: ASSET });
         await awaitOwn(alice, t2);
         await awaitRecipient(bob, t2);
-        const afterT2 = alice.balance(ASSET);
+        const afterT2 = await shieldedBalance(alice, ASSET);
 
         // Each transfer also funds a note paying the relayer out of alice's own
         // inputs, so her running balance drops by more than she sent — and the
@@ -73,14 +79,14 @@ describe("cold-client resync", () => {
             DEPOSIT_1 + DEPOSIT_2 - TO_BOB_1 - TO_BOB_2 - fee1 - fee2,
         );
         // The warm counterparty saw both incoming notes as they landed.
-        expect(bob.balance(ASSET), "bob, synced live").toBe(EXPECTED_BOB_TOTAL);
-    }, TEST_TIMEOUT.SEQUENCE);
+        expect(await shieldedBalance(bob, ASSET), "bob, synced live").toBe(EXPECTED_BOB_TOTAL);
+    }, ACTIVITY_TIMEOUT);
 
     it("fresh wallet reconstructs bob's balance from scratch", async () => {
         await activity();
         const cold = await createTestWallet(BOB_NSK);
-        await cold.sync({ limit: SYNC_LIMIT });
-        expect(cold.balance(ASSET)).toBe(EXPECTED_BOB_TOTAL);
-        expect(cold.notes({ asset: ASSET, spent: false }).length).toBe(2);
-    }, TEST_TIMEOUT.LOCAL);
+        await cold.sync({ pageSize: SYNC_LIMIT });
+        expect(await shieldedBalance(cold, ASSET)).toBe(EXPECTED_BOB_TOTAL);
+        expect((await cold.notes({ asset: ASSET, spent: false })).length).toBe(2);
+    }, ACTIVITY_TIMEOUT + TEST_TIMEOUT.LOCAL);
 });

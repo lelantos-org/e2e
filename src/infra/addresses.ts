@@ -39,6 +39,13 @@ export interface Addresses {
     wrappedNative?: string;
     nativeAdapter?: string;
     permit2: string;
+    /** Permissionless; a second Bundler for the binding test comes from here. */
+    bundlerFactory: string;
+    /**
+     * The relayer's Bundler, created by DeployTestSwap with the relayer's
+     * signer as operator. The address `/chains` publishes and wallets bind.
+     */
+    bundler: string;
     swap?: SwapAddresses;
     /** Absent when the stack was brought up with `E2E_SKIP_YIELD=1`. */
     yield?: Record<number, YieldAsset>;
@@ -48,7 +55,6 @@ export interface Urls {
     rpc: string;
     relayer: string;
     fmd: string;
-    /** Emitted by `npm run up` for manual queries; no test reads it. */
     explorer: string;
     metaquoter?: string;
 }
@@ -61,6 +67,10 @@ export interface StackEnv extends Urls {
     payerKey: string;
     recipientAddress: string;
     permit2: string;
+    bundlerFactory: string;
+    bundler: string;
+    /** The relayer's `bundle_max_items`; see `infra/relayer-config.ts`. */
+    bundleMaxItems: number;
     nativeAdapter?: string;
     swap?: SwapAddresses;
     yield?: Record<number, YieldAsset>;

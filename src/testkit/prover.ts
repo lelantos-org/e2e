@@ -12,6 +12,6 @@ import { createRequire } from "node:module";
 const resolve = createRequire(import.meta.url).resolve;
 
 export const PROVER_PATHS = {
-    wasmPath: resolve("@lelantos-org/circuits/4x6/4x6.wasm"),
-    zkeyPath: resolve("@lelantos-org/circuits/4x6/4x6_final.zkey"),
+    circuit: resolve("@lelantos-org/circuits/4x6/4x6.wasm"),
+    zkey: resolve("@lelantos-org/circuits/4x6/4x6_final.zkey"),
 };

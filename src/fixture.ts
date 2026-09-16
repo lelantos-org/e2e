@@ -2,8 +2,8 @@
 // how a file expresses a multi-step story without leaking state between
 // sibling `it`s.
 
-import type { AssetId, DenominationPolicy, Wallet } from "@lelantos-org/sdk";
-import type { Field } from "@lelantos-org/sdk/crypto";
+import type { AssetId, WalletApi } from "@lelantos-org/sdk";
+import type { Field } from "@lelantos-org/sdk/primitives";
 
 import { fundPayerForAsset, setupHarness, type Harness } from "./harness.js";
 import type { Erc20Helpers } from "./scenario.js";
@@ -15,7 +15,7 @@ import { createTestWallet } from "./wallet.js";
  * Distinct from `scenario.ts`'s `CircuitWallet`, which is the raw key bundle
  * the direct `buildDeposit` path takes.
  */
-export type SdkWallet = Wallet;
+export type SdkWallet = WalletApi;
 
 /**
  * Memoise an async step.
@@ -68,8 +68,6 @@ export interface FileFixture<K extends string> {
 export async function setupFile<K extends string = never>(opts: {
     nsks?: Record<K, Field>;
     fund?: readonly FundSpec[];
-    /** Applied to every wallet this file builds. See `CreateWalletOpts`. */
-    denominations?: DenominationPolicy;
 } = {}): Promise<FileFixture<K>> {
     const h = await setupHarness();
 
@@ -80,10 +78,7 @@ export async function setupFile<K extends string = never>(opts: {
 
     const w = {} as Record<K, SdkWallet>;
     for (const [name, nsk] of Object.entries(opts.nsks ?? {}) as [K, Field][]) {
-        w[name] = await createTestWallet(
-            nsk,
-            opts.denominations !== undefined ? { denominations: opts.denominations } : {},
-        );
+        w[name] = await createTestWallet(nsk);
     }
 
     return {

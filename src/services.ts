@@ -112,6 +112,8 @@ export interface BackendSpecArgs {
     swap?: SwapAddresses;
     /** Absent when no wrapped-native token was deployed. */
     nativeAdapter?: string;
+    /** The relayer's Bundler; every relayer transaction is sent to it. */
+    bundler: string;
 }
 
 export function backendSpecs({
@@ -119,6 +121,7 @@ export function backendSpecs({
     feeTokens,
     swap,
     nativeAdapter,
+    bundler,
 }: BackendSpecArgs): BackendServices {
     const relayerConfigPath = renderRelayerConfig(feeTokens);
     const services: BackendServices = {
@@ -193,6 +196,9 @@ export function backendSpecs({
                 [`RELAYER_CHAIN_${CHAIN_ID}_POOL_ADDRESS`]: masp,
                 [`RELAYER_CHAIN_${CHAIN_ID}_RPC_URL`]: ANVIL_RPC_INTERNAL,
                 [`RELAYER_CHAIN_${CHAIN_ID}_SIGNER_KEY`]: RELAYER.privateKey,
+                // Published on `/chains` as `relayerAddress`. The signer above
+                // is its operator; the relayer refuses to boot without it.
+                [`RELAYER_CHAIN_${CHAIN_ID}_BUNDLER_ADDRESS`]: bundler,
                 ...(swap
                     ? { [`RELAYER_CHAIN_${CHAIN_ID}_SWAP_WRAPPER_ADDRESS`]: swap.wrapper }
                     : {}),
@@ -279,6 +285,8 @@ export async function runService(
     c = c.withLogConsumer(async (stream) => {
         stream.on("data", (line) => sink.write(line));
         stream.on("err", (line) => sink.write(line));
+        // The stream ends with the container; release the file with it.
+        stream.on("end", () => sink.end());
     });
 
     return c.start();

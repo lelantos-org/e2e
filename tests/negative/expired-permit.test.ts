@@ -1,19 +1,19 @@
-// `Wallet.deposit` clamps the Permit2 deadline to `now + 3600`, so the
-// backdated deadline is submitted through the direct path instead.
+// `wallet.deposit` refuses a `deadline` already in the past before it signs
+// (`DEADLINE_PASSED`), so the backdated deadline is submitted through the
+// direct path instead.
 
 import { beforeAll, describe, it } from "vitest";
 
-import { env } from "../../src/env.js";
 import {
+    amt,
     ASSET,
-    buildDeposit,
+    buildDirectDeposit,
     counter,
     expectRevert,
     type Harness,
     makeWallet,
     newAuxRng,
     REVERT,
-    rngForOutput,
     unflushableFee,
     submitDepositDirect,
     TEST_NSK,
@@ -22,43 +22,38 @@ import {
 } from "../../src/harness.js";
 import { setupFile } from "../../src/fixture.js";
 
-const expiredPermitDeadline = () => BigInt(Math.floor(Date.now() / 1000) - 60);
-
 const { alice: NSK } = TEST_NSK.negExpired;
+const DEPOSIT = amt(50n);
 
 describe("negative: expired Permit2 deadline", () => {
     let h: Harness;
 
     beforeAll(async () => {
-        ({ h } = await setupFile({ fund: [{ asset: ASSET, amount: withFee(50n) }] }));
+        ({ h } = await setupFile({ fund: [{ asset: ASSET, amount: withFee(DEPOSIT) }] }));
     });
 
     it("deposit reverts when deadline < block.timestamp", async () => {
+        // Seeds far apart: `counter` seeds a few apart share most of their draws.
         const rng = counter(0xe1_0001n);
-        const aux = newAuxRng(0xe1_0002n);
+        const auxRng = newAuxRng(0xe1_a000_0001n);
         const alice = makeWallet(h.P, h.J, NSK);
-        const built = buildDeposit({
-            ...h.bundleCommon(ASSET),
-            publicIn: 50n,
+        const built = buildDirectDeposit(h, {
+            amount: DEPOSIT,
             recipient: alice.recipient,
-            output0: {
-                rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(),
-                aux: rngForOutput(aux),
-            },
-            fee: unflushableFee(alice.recipient, { rng, auxRng: aux }),
+            rngs: { rng, auxRng },
+            fee: (rngs) => unflushableFee(alice.recipient, rngs),
         });
+        // Backdated from the chain's clock, not the host's: Permit2 compares
+        // against `block.timestamp`, and anvil's time can run ahead of or behind
+        // the wall clock.
+        const latest = await h.provider.getBlock("latest");
+        if (latest === null) throw new Error("no latest block to backdate the deadline from");
+        const deadline = BigInt(latest.timestamp - 60);
         await expectRevert(
-            submitDepositDirect({
-                payer: h.payer,
-                deposit: built.deposit,
-                aux: built.aux,
-                feeAux: built.feeAux,
-                tokenAddr: env.token2,
-                // Correctly sized, so the deadline is the only fault.
-                maxTotal: withFee(50n),
-                deadline: expiredPermitDeadline(),
-            }),
+            // `maxTotal` is left at its correct default, so the deadline is the
+            // only fault.
+            submitDepositDirect(h, built, { deadline }),
             REVERT.PERMIT2_EXPIRED,
         );
-    }, TEST_TIMEOUT.SPEND);
+    }, TEST_TIMEOUT.DEPOSIT);
 });

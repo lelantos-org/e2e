@@ -22,10 +22,10 @@ jobs:
   e2e:
     name: E2E (single job)
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
 
     env:
-      CIRCUITS_RELEASE: v0.11.2
+      CIRCUITS_RELEASE: v0.16.0
 
     steps:
       - name: Free disk space
@@ -74,24 +74,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
-          mkdir -p vendor/circuits/build/4x4_js vendor/circuits/build/tree_update_batch_js
+          mkdir -p vendor/circuits/build/4x6_js vendor/circuits/build/tree_update_batch_js
           gh release download "$CIRCUITS_RELEASE" \
             --repo lelantos-org/circuits \
-            --pattern '4x4.wasm' \
-            --pattern '4x4.r1cs' \
-            --pattern '4x4_final.zkey' \
+            --pattern '4x6.wasm' \
+            --pattern '4x6.r1cs' \
+            --pattern '4x6_final.zkey' \
             --pattern 'tree_update_batch.wasm' \
             --pattern 'tree_update_batch.r1cs' \
             --pattern 'tree_update_batch_final.zkey' \
             --dir vendor/circuits/build
-          mv vendor/circuits/build/4x4.wasm vendor/circuits/build/4x4_js/4x4.wasm
+          mv vendor/circuits/build/4x6.wasm vendor/circuits/build/4x6_js/4x6.wasm
           mv vendor/circuits/build/tree_update_batch.wasm vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
 
       - name: Verify circuit artifacts
         run: |
-          test -f vendor/circuits/build/4x4_final.zkey
-          test -f vendor/circuits/build/4x4.r1cs
-          test -f vendor/circuits/build/4x4_js/4x4.wasm
+          test -f vendor/circuits/build/4x6_final.zkey
+          test -f vendor/circuits/build/4x6.r1cs
+          test -f vendor/circuits/build/4x6_js/4x6.wasm
           test -f vendor/circuits/build/tree_update_batch_final.zkey
           test -f vendor/circuits/build/tree_update_batch_js/tree_update_batch.wasm
           test -f vendor/circuits/build/tree_update_batch.r1cs
@@ -101,11 +101,11 @@ jobs:
         run: |
           set -euo pipefail
           tree_sha=$(sha256sum vendor/circuits/build/tree_update_batch_final.zkey | cut -d' ' -f1)
-          pair_sha=$(sha256sum vendor/circuits/build/4x4_final.zkey | cut -d' ' -f1)
+          pair_sha=$(sha256sum vendor/circuits/build/4x6_final.zkey | cut -d' ' -f1)
           echo "tree_zkey_sha=$tree_sha" >> "$GITHUB_OUTPUT"
           echo "pair_zkey_sha=$pair_sha" >> "$GITHUB_OUTPUT"
           echo "tree_update_batch_final.zkey = $tree_sha"
-          echo "4x4_final.zkey               = $pair_sha"
+          echo "4x6_final.zkey               = $pair_sha"
 
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3

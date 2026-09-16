@@ -11,8 +11,8 @@
     "deploy": "tsx src/orchestrate.ts deploy"
   },
   "dependencies": {
-    "@lelantos-org/circuits": "^0.15.0",
-    "@lelantos-org/sdk": "^0.37.0",
+    "@lelantos-org/circuits": "^0.16.0",
+    "@lelantos-org/sdk": "^0.39.0",
     "commander": "^14.0.3",
     "ethers": "^6.13.0",
     "snarkjs": "^0.7.4",

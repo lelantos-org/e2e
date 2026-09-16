@@ -3,12 +3,13 @@
 //
 // Three kinds, not interchangeable:
 //   * `TIMEOUT`      — how long an internal `pollUntil` waits before failing
+//   * `POLL`         — wall-clock budget and interval for the commitment waits
 //   * `TEST_TIMEOUT` — vitest's per-`it` budget, passed as its timeout argument
-//   * `POLL`         — attempt/interval pairs for the commitment waits
 //
-// A `TEST_TIMEOUT` must exceed the `TIMEOUT` of whatever the test waits on, or
-// the poll's diagnostic is never printed: vitest kills the test first and
-// reports its own generic timeout instead.
+// A `TEST_TIMEOUT` must exceed the sum of the waits its test can run, or the
+// poll's diagnostic is never printed: vitest kills the test first and reports
+// its own generic timeout instead. So the per-test budgets are derived from the
+// waits below rather than written as independent numbers.
 
 export const TIMEOUT = {
     POLL_DEFAULT_MS: 120_000,
@@ -25,42 +26,28 @@ export const TIMEOUT = {
      * Advisory only; the note-cache poll decides pass or fail.
      */
     DEPOSIT_FLUSH_MS: 60_000,
+    /**
+     * One plain HTTP request to a stack service (health, test hooks, explorer).
+     * Without a deadline a service that accepts and never answers holds the
+     * test until vitest kills it.
+     */
+    HTTP_MS: 15_000,
 } as const;
 
-/** Per-`it` budgets, named by what the test waits on. */
-export const TEST_TIMEOUT = {
-    /** One spend: proof + chain inclusion + indexer pickup. */
-    SPEND: 240_000,
-    /** A swap: as above, plus the relayer-flushed second leg. */
-    SWAP: 360_000,
-    /** A multi-transaction narrative inside a single `it`. */
-    SEQUENCE: 600_000,
-    /** Reads settled state only; no chain round trip. */
-    LOCAL: 60_000,
-    /** N parallel deposits plus a relayer flush tick. */
-    BATCH_FLUSH: 240_000,
-} as const;
-
-// fmd-webserver caps `listNotes` at 1000 rows; ask for the maximum.
+/** fmd-webserver caps `listNotes` at 1000 rows; ask for the maximum. */
 export const LIST_LIMIT = 1000;
 
 /**
- * Page size for a wallet's scan.
- *
- * Test files share one fmd index, so this is a silent correctness cliff: once
- * the index holds more rows than this, a freshly written note sits behind older
- * pages and a `sync()` that "found nothing" has looked at the wrong page. That
- * surfaces as `awaitOwn` timing out on a commitment that is on chain and in the
- * index, and only in full-suite runs.
- *
- * Pinned to the server's own cap because each transaction writes several
- * leaves: a deposit mints two, and a fee-paying spend fills every output slot
- * rather than padding with zeros.
+ * Page size for a wallet's scan. The SDK pages through the whole feed with a
+ * cursor, so this bounds each request, not what a sync can reach; the
+ * server's own cap keeps a catch-up over the shared index to few requests.
  */
 export const SYNC_LIMIT = LIST_LIMIT;
 
 export interface PollOpts {
-    maxAttempts: number;
+    /** Wall-clock budget for the whole wait, sync time included. */
+    timeoutMs: number;
+    /** Delay between syncs. */
     pollMs: number;
 }
 
@@ -70,15 +57,39 @@ export interface PollOpts {
  * spend pipeline.
  */
 export const POLL: Record<"COMMITMENT" | "SPEND", PollOpts> = {
-    COMMITMENT: { maxAttempts: 80, pollMs: 2000 },
-    SPEND:      { maxAttempts: 60, pollMs: 1500 },
+    COMMITMENT: { timeoutMs: 180_000, pollMs: 2000 },
+    SPEND:      { timeoutMs: 120_000, pollMs: 1500 },
 } as const;
 
-/**
- * viem's default `getBlockNumber` cache window, in ms.
- *
- * `cacheTime` defaults to `pollingInterval` (4000ms) and the SDK's client sets
- * neither, so a tip read can be this stale. `advanceOneBlock` waits it out; see
- * the note there for why mining more blocks does not help.
- */
-export const VIEM_BLOCK_CACHE_MS = 4_000;
+/** Headroom on top of the waits for proving, receipts and plain reads. */
+const SLACK_MS = 60_000;
+
+/** A deposit: the note lands, then the relayer's fee note is recovered. */
+const DEPOSIT_MS = POLL.COMMITMENT.timeoutMs + TIMEOUT.POLL_DEFAULT_MS + SLACK_MS;
+
+/** A spend: both sides' notes land, then the relayer's fee note is recovered. */
+const SPEND_MS = 2 * POLL.SPEND.timeoutMs + TIMEOUT.POLL_DEFAULT_MS + SLACK_MS;
+
+/** Per-`it` budgets, named by what the test waits on. */
+export const TEST_TIMEOUT = {
+    /** One deposit, awaited and its relayer fee confirmed. */
+    DEPOSIT: DEPOSIT_MS,
+    /** One spend: proof + chain inclusion + indexer pickup on both sides. */
+    SPEND: SPEND_MS,
+    /** A swap: as above, plus the relayer-flushed second leg. */
+    SWAP: SPEND_MS + TIMEOUT.BALANCE_POLL_MS,
+    /**
+     * A multi-transaction narrative, or an `it` that pulls in `once` steps
+     * before its own: a deposit and a spend, then what the test itself waits on.
+     */
+    SEQUENCE: DEPOSIT_MS + 2 * SPEND_MS,
+    /** Reads settled state only; no chain round trip. */
+    LOCAL: 60_000,
+    /**
+     * Several deposits in a row, then a spend over them: the consolidation and
+     * max-spend specs, where each deposit waits on its own flush.
+     */
+    MANY_DEPOSITS: 4 * DEPOSIT_MS,
+    /** N parallel deposits, one flush, then every note and fee note in parallel. */
+    BATCH_FLUSH: TIMEOUT.BATCH_FLUSH_MS + 2 * TIMEOUT.POLL_DEFAULT_MS + SLACK_MS,
+} as const;

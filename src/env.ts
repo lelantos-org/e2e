@@ -20,6 +20,11 @@ function opt(name: string): string | undefined {
     return process.env[name] || undefined;
 }
 
+function optAddr(name: string): EvmAddress | undefined {
+    const v = opt(name);
+    return v === undefined ? undefined : evmAddress(v);
+}
+
 /**
  * Read a var that exists only when an optional deploy step ran, naming the
  * flag that turns that step off.
@@ -64,12 +69,24 @@ export const env = {
     payerKey: req("PAYER_KEY"),
     recipientAddress: reqAddr("RECIPIENT_ADDRESS"),
     permit2Address: reqAddr("PERMIT2_ADDRESS"),
+    explorerUrl: req("EXPLORER_URL"),
+    // The relayer's Bundler: what `/chains` publishes as `relayerAddress` and
+    // what every wallet binds, since the pool sees it as `msg.sender`.
+    bundlerAddress: reqAddr("BUNDLER_ADDRESS"),
+    bundlerFactoryAddress: reqAddr("BUNDLER_FACTORY_ADDRESS"),
+    /** The relayer's `bundle_max_items`. */
+    bundleMaxItems: Number(req("RELAYER_BUNDLE_MAX_ITEMS")),
     // Present only when the stack includes a wrapped-native token. Native
-    // deposits and `withdrawEth` both run through it; the pool is ERC-20 only.
-    nativeAdapterAddress: opt("NATIVE_ADAPTER_ADDRESS"),
+    // deposits and withdrawals both run through it; the pool is ERC-20 only.
+    nativeAdapterAddress: optAddr("NATIVE_ADAPTER_ADDRESS"),
 
-    // Present only when SWAP_ENABLED=true at deploy.
-    metaquoterUrl: () => reqSwap("METAQUOTER_URL"),
+    // Present only when the swap stack was deployed (`E2E_SKIP_SWAP` unset).
+    // The optional reads are for wiring that works either way; a test that
+    // needs swaps gates on `swapEnabled` and then uses `swap.*`, which throw
+    // naming the switch.
+    swapEnabled: opt("SWAP_WRAPPER_ADDRESS") !== undefined,
+    swapWrapperAddress: optAddr("SWAP_WRAPPER_ADDRESS"),
+    metaquoterUrl: opt("METAQUOTER_URL"),
     swap: {
         univ3Quoter: () => evmAddress(reqSwap("UNIV3_QUOTER_ADDRESS")),
         univ3Adapter: () => evmAddress(reqSwap("UNIV3_ADAPTER_ADDRESS")),

@@ -13,5 +13,9 @@ export const TREE_DEPTH = 11;
 export const N_IN = 4;
 export const N_OUT = 6;
 
+// Leaves a flushed deposit inserts: the depositor's note and the relayer's fee
+// note, which the pool mints unconditionally.
+export const LEAVES_PER_DEPOSIT = 2;
+
 // FMD γ. False-positive rate = 2^-γ. Must match asset registry + circuit.
 export const FMD_GAMMA = 5;

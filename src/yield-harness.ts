@@ -1,6 +1,6 @@
 // Test-side controls for the yield stack: read the pool's own measure of what a
 // yield asset's units are worth, and move the vault's index under it. Deposits
-// and withdrawals against a yield id run through the SDK's `Wallet` exactly as
+// and withdrawals against a yield id run through the SDK wallet exactly as
 // a plain id does — the id is the only difference — so there is no wrapper for
 // them here.
 //
@@ -9,7 +9,7 @@
 
 import { ethers } from "ethers";
 
-import type { YieldRate } from "@lelantos-org/sdk";
+import type { YieldRate } from "@lelantos-org/sdk/protocol";
 
 import {
     MASP_ABI,
@@ -185,15 +185,6 @@ export async function vaultEarn(
     amt: bigint,
 ): Promise<void> {
     await send(signer, asset, (v) => v.earn(amt));
-}
-
-/** Burn `amt` of the vault's underlying, moving the index below `RAY`. */
-export async function vaultLose(
-    signer: ethers.Signer,
-    asset: YieldAssetEnv,
-    amt: bigint,
-): Promise<void> {
-    await send(signer, asset, (v) => v.lose(amt));
 }
 
 /**

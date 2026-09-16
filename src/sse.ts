@@ -10,7 +10,7 @@
 //
 // Pure transport — no config, no env — so it stays testable on its own.
 
-import type { EventSourceLike } from "@lelantos-org/sdk/relayer";
+import type { EventSourceLike } from "@lelantos-org/sdk/services";
 
 const CONNECTING = 0;
 const OPEN = 1;

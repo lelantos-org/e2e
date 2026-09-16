@@ -12,13 +12,13 @@ import {
     type StartedTestContainer,
 } from "testcontainers";
 
-import { DEPLOYER, PAYER, RECIPIENT } from "./accounts.js";
+import { DEPLOYER, PAYER, RECIPIENT, RELAYER } from "./accounts.js";
 import { type Addresses, requireToken, type StackEnv, type SwapAddresses, type Urls, type YieldAsset } from "./infra/addresses.js";
 import { CHAIN_ID, CONTRACTS_DIR, E2E_DIR, logDir } from "./infra/docker.js";
 import { FEE_BPS } from "./protocol/amounts.js";
 import { FEE_TOKENS } from "./protocol/assets.js";
-import type { FeeTokenSpec } from "./infra/relayer-config.js";
-import { log } from "./utils.js";
+import { BUNDLE_MAX_ITEMS, type FeeTokenSpec } from "./infra/relayer-config.js";
+import { log, pollUntil } from "./utils.js";
 import { CANONICAL_PERMIT2_ADDRESS, preDeployPermit2 } from "./permit2.js";
 import { ANVIL, backendSpecs, ORACLE, POSTGRES, runService, type ServiceSpec } from "./services.js";
 
@@ -45,6 +45,11 @@ export class Stack {
 
         this.postgres = await runService(POSTGRES, this.network);
         this.anvil = await runService(ANVIL, this.network);
+        // The container's "Listening" line is logged inside the VM; the
+        // host-mapped port can refuse connections for a moment after it (seen
+        // on colima as ECONNREFUSED on the very first RPC). Wait for the host
+        // side to answer before the first real call rather than fail boot.
+        await waitForRpc(this.rpcUrl());
 
         // `DeployPermit2` in DeployTest.s.sol uses `vm.etch`, which is dropped
         // under `--broadcast`. Without this pre-deploy the MASP constructor
@@ -69,27 +74,38 @@ export class Stack {
         };
 
         const coreOut = await runForgeScript("DeployTest", rpcUrl, baseEnv);
-        this.addresses = parseDeployOutput(coreOut);
+        const core = parseDeployOutput(coreOut);
 
         // Both follow-on scripts read the core deploy's addresses back out of
-        // the environment, in the same `MASP` / `PERMIT2` / `TOKEN_<id>` shape
-        // the core script logged them in.
-        const deployedEnv = { ...baseEnv, ...addressEnv(this.addresses) };
+        // the environment, in the same `MASP` / `PERMIT2` / `NATIVE_ADAPTER` /
+        // `TOKEN_<id>` shape the core script logged them in.
+        const deployedEnv = { ...baseEnv, ...addressEnv(core) };
 
-        // DeployTestSwap runs after the core deploy. E2E_SKIP_SWAP=1 skips it,
-        // so non-swap suites can run without the mock UniV3 stack.
-        if (process.env.E2E_SKIP_SWAP !== "1") {
-            const swapOut = await runForgeScript("DeployTestSwap", rpcUrl, deployedEnv);
-            const swap = requireSwapAddresses(stripAnsi(swapOut), "swap deploy");
-            this.addresses = { ...this.addresses, swap };
-        }
+        // DeployTestSwap runs after the core deploy, and always: besides the
+        // mock swap stack it deploys the `BundlerFactory`, whose targets are
+        // fixed at construction and so must follow the wrapper, and the
+        // relayer's Bundler, without which every relayer transaction reverts.
+        // The deployer owns that Bundler; `BUNDLER_OPERATOR` operates it.
+        // E2E_SKIP_SWAP=1 therefore no longer skips the script, only withholds
+        // its swap addresses, so the metaquoter stays down and swap tests skip.
+        const swapOut = stripAnsi(
+            await runForgeScript("DeployTestSwap", rpcUrl, {
+                ...deployedEnv,
+                BUNDLER_OPERATOR: RELAYER.address,
+            }),
+        );
+        this.addresses = {
+            ...core,
+            ...requireBundlerAddresses(swapOut, "swap deploy"),
+            swap: process.env.E2E_SKIP_SWAP === "1" ? core.swap : requireSwapAddresses(swapOut, "swap deploy"),
+        };
 
         // DeployTestYield registers a second, yield-bearing id for every
         // registered asset — a MockERC4626 vault plus its ERC4626Venue, bound
         // through `addYieldAsset`. It runs last because the binding is
         // permanent: `addYieldAsset` goes through the add-only registry, so a
         // re-run against a live MASP reverts rather than rebinding.
-        // E2E_SKIP_YIELD=1 skips it, as E2E_SKIP_SWAP does for the swap stack.
+        // E2E_SKIP_YIELD=1 skips it.
         if (process.env.E2E_SKIP_YIELD !== "1") {
             const yieldOut = await runForgeScript("DeployTestYield", rpcUrl, deployedEnv);
             this.addresses = {
@@ -118,6 +134,7 @@ export class Stack {
             feeTokens,
             swap: addrs.swap,
             nativeAdapter: addrs.nativeAdapter,
+            bundler: addrs.bundler,
         });
 
         const start = async (spec: ServiceSpec): Promise<StartedTestContainer> => {
@@ -177,6 +194,9 @@ export class Stack {
             payerKey: PAYER.privateKey,
             recipientAddress: RECIPIENT.address,
             permit2: this.addresses.permit2,
+            bundlerFactory: this.addresses.bundlerFactory,
+            bundler: this.addresses.bundler,
+            bundleMaxItems: BUNDLE_MAX_ITEMS,
             nativeAdapter: this.addresses.nativeAdapter,
             swap: this.addresses.swap,
             yield: this.addresses.yield,
@@ -213,6 +233,23 @@ export class Stack {
             (c): c is StartedTestContainer => c !== undefined,
         );
     }
+}
+
+/** Poll `eth_chainId` on the host-mapped RPC until it answers. */
+async function waitForRpc(rpcUrl: string): Promise<void> {
+    await pollUntil(
+        async (signal) => {
+            const res = await fetch(rpcUrl, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+                signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
+            });
+            if (!res.ok) throw new Error(`eth_chainId HTTP ${res.status}`);
+            return true;
+        },
+        { label: `anvil rpc at ${rpcUrl}`, timeoutMs: 60_000, intervalMs: 250 },
+    );
 }
 
 function hostUrl(c: StartedTestContainer, internalPort: number): string {
@@ -289,14 +326,18 @@ function stripAnsi(s: string): string {
 /**
  * The core deploy's addresses as the environment the follow-on scripts read.
  *
- * They take `MASP`, `PERMIT2` and one `TOKEN_<id>` per registered asset — the
- * same keys `DeployTest` logged — so this is the deploy's own output handed
- * back rather than a second table either script could disagree with.
+ * They take `MASP`, `PERMIT2`, `NATIVE_ADAPTER` and one `TOKEN_<id>` per
+ * registered asset — the same keys `DeployTest` logged — so this is the
+ * deploy's own output handed back rather than a second table either script
+ * could disagree with. `NATIVE_ADAPTER` is what DeployTestSwap fixes into the
+ * `BundlerFactory` beside the pool and the wrapper; unset, no Bundler could
+ * call `withdrawNative`.
  */
-function addressEnv(a: Addresses): Record<string, string> {
+function addressEnv(a: CoreAddresses): Record<string, string> {
     return {
         MASP: a.masp,
         PERMIT2: a.permit2,
+        ...(a.nativeAdapter ? { NATIVE_ADAPTER: a.nativeAdapter } : {}),
         ...Object.fromEntries(
             Object.entries(a.tokens).map(([id, addr]) => [`TOKEN_${id}`, addr]),
         ),
@@ -331,6 +372,22 @@ function readSwapAddresses(found: Map<string, string>): SwapAddresses {
         mockUniversalRouter: found.get("MOCK_UNIVERSAL_ROUTER")!,
         wrapper: found.get("SWAP_WRAPPER")!,
     };
+}
+
+/**
+ * `BUNDLER_FACTORY` and `BUNDLER` from DeployTestSwap, or throw naming the
+ * first missing one. `BUNDLER` is logged only when `BUNDLER_OPERATOR` was set,
+ * which `deploy()` always does.
+ */
+function requireBundlerAddresses(
+    stripped: string,
+    what: string,
+): Pick<Addresses, "bundlerFactory" | "bundler"> {
+    const found = parseAddressPairs(stripped);
+    for (const k of ["BUNDLER_FACTORY", "BUNDLER"]) {
+        if (!found.has(k)) throw new Error(`${what}: missing ${k} in forge output:\n${stripped}`);
+    }
+    return { bundlerFactory: found.get("BUNDLER_FACTORY")!, bundler: found.get("BUNDLER")! };
 }
 
 /** Every swap address, or throw naming the first missing one. */
@@ -387,11 +444,15 @@ async function ensureCircuits(): Promise<void> {
     await execFileAsync("scripts/fetch-circuits.sh", [], { cwd: E2E_DIR });
 }
 
-function parseDeployOutput(stdout: string): Addresses {
+/** What the core deploy alone yields: everything but the Bundler pair, which DeployTestSwap logs. */
+type CoreAddresses = Omit<Addresses, "bundlerFactory" | "bundler">;
+
+function parseDeployOutput(stdout: string): CoreAddresses {
     const stripped = stripAnsi(stdout);
     const found = parseAddressPairs(stripped);
 
-    for (const k of ["SPEND_VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"]) {
+    const required = ["SPEND_VERIFIER", "TREE_UPDATE_BATCH_VERIFIER", "MASP", "PERMIT2"];
+    for (const k of required) {
         if (!found.has(k)) {
             throw new Error(`deploy: missing ${k} in forge output:\n${stripped}`);
         }

@@ -5,7 +5,7 @@
 // every `buildDeposit` call needs one, including in tests concerned only with
 // the first leaf.
 //
-// `Wallet.deposit` builds this note itself, pricing it off
+// `wallet.deposit` builds this note itself, pricing it off
 // `/v1/deposit/estimate`. These helpers cover the direct `buildDeposit` path,
 // which bypasses the wallet.
 //
@@ -18,14 +18,9 @@
 // `unflushableFee` is only for tests that assert a revert at submit time and
 // never reach a flush.
 
-import type { buildDeposit } from "@lelantos-org/sdk/bundle";
-import type { Field, Jubjub } from "@lelantos-org/sdk/crypto";
-import { decodeAddress } from "@lelantos-org/sdk/keys";
-import type { RelayerClient } from "@lelantos-org/sdk/relayer";
-import { ethers } from "ethers";
-
-import { MASP_DEPOSIT_ABI } from "../protocol/abi.js";
-import { parseContractLogs } from "../protocol/logs.js";
+import { decodeAddress, type Field, type Jubjub } from "@lelantos-org/sdk/primitives";
+import type { buildDeposit } from "@lelantos-org/sdk/protocol";
+import type { RelayerClient } from "@lelantos-org/sdk/services";
 
 import { RELAYER_FEE_ADDRESS } from "../protocol/shielded-fee.js";
 import { rngForOutput } from "../scenario.js";
@@ -69,9 +64,20 @@ export async function quoteDepositFee(
     return BigInt(quote.circuitAmount);
 }
 
-/** A fee note worth `value`, addressed to the relayer this stack runs. */
-export function relayerFeeNote(J: Jubjub, value: bigint, rngs: FeeRng): DepositFeeArg {
-    return feeNote(decodeAddress(J, RELAYER_FEE_ADDRESS), value, rngs);
+/**
+ * A fee note worth `value`, addressed to the relayer this stack runs.
+ *
+ * `asset` names the asset the note is paid in when it is not the deposit's
+ * own; the pool then pulls it as a second token. Omitted, it follows the
+ * deposit.
+ */
+export function relayerFeeNote(
+    J: Jubjub,
+    value: bigint,
+    rngs: FeeRng,
+    asset?: bigint,
+): DepositFeeArg {
+    return feeNote(decodeAddress(J, RELAYER_FEE_ADDRESS), value, rngs, asset);
 }
 
 /**
@@ -81,64 +87,40 @@ export function relayerFeeNote(J: Jubjub, value: bigint, rngs: FeeRng): DepositF
  * flush it, so the payer's funds sit until they cancel. Correct only for a test
  * that asserts the submit reverts; use `relayerFeeNote` everywhere else.
  */
-export function unflushableFee(recipient: Recipient, rngs: FeeRng): DepositFeeArg {
-    return feeNote(recipient, 0n, rngs);
+export function unflushableFee(
+    recipient: Recipient,
+    rngs: FeeRng,
+    /**
+     * A valued note in another asset instead of the zero-value self-pad: still
+     * addressed away from the relayer, so still never flushed, but escrowed on
+     * the pool's two-token path. For exercising the two-token cancel.
+     */
+    paid?: { value: bigint; asset: bigint },
+): DepositFeeArg {
+    return feeNote(recipient, paid?.value ?? 0n, rngs, paid?.asset);
 }
 
 /**
- * Randomness is drawn from the same counters as the depositor's note, so a
- * test's draws stay sequential and reproducible: `buildDeposit` consumes them
- * in a fixed order, and interleaving a second source makes reruns diverge.
+ * The per-note randomness `buildDeposit` takes for either leaf, drawn in a
+ * fixed order.
+ *
+ * Both leaves draw from the same counters, so a test's draws stay sequential
+ * and reproducible: interleaving a second source makes reruns diverge.
  */
-function feeNote(recipient: Recipient, value: bigint, { rng, auxRng }: FeeRng): DepositFeeArg {
+export function noteRandomness({ rng, auxRng }: FeeRng): Parameters<typeof buildDeposit>[0]["output0"] {
+    return { rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(), aux: rngForOutput(auxRng) };
+}
+
+function feeNote(
+    recipient: Recipient,
+    value: bigint,
+    rngs: FeeRng,
+    asset?: bigint,
+): DepositFeeArg {
     return {
         recipient,
         value,
-        rho: rng(),
-        rcm: rng(),
-        rcv: rng(),
-        rcvDep: rng(),
-        aux: rngForOutput(auxRng),
-    };
-}
-
-/** The fee leaf a deposit escrowed: what it is worth and which leaf it is. */
-export interface DepositFeeLeaf {
-    /** `feeIn`, in circuit units. Zero on a subsidised chain. */
-    value: bigint;
-    /** `feeCm`, the commitment the relayer must be able to recover. */
-    cm: string;
-}
-
-/**
- * The fee leaf of a completed deposit, read from its `DepositEscrowed` log.
- *
- * The log rather than a fresh relayer quote: the wallet priced the note at
- * submit time, and a quote a few blocks later can differ because gas moves.
- * The event is what the payer was actually debited for, and it carries the
- * commitment alongside the amount, which is what lets the relayer side of the
- * payment be checked (see `testkit/relayer-fee.ts`).
- */
-export async function depositFeeLeaf(
-    provider: ethers.Provider,
-    maspAddress: string,
-    txHash: string,
-): Promise<DepositFeeLeaf> {
-    const receipt = await provider.getTransactionReceipt(txHash);
-    if (receipt === null) throw new Error(`deposit ${txHash}: no receipt`);
-    const masp = new ethers.Contract(maspAddress, MASP_DEPOSIT_ABI, provider);
-    const escrowed = parseContractLogs(receipt, masp, "DepositEscrowed");
-    if (escrowed.length === 0) {
-        throw new Error(`deposit ${txHash}: no DepositEscrowed log`);
-    }
-    if (escrowed.length > 1) {
-        throw new Error(
-            `deposit ${txHash}: ${escrowed.length} DepositEscrowed logs; ` +
-                "this helper assumes one deposit per transaction",
-        );
-    }
-    return {
-        value: BigInt(escrowed[0].args.feeIn as bigint),
-        cm: escrowed[0].args.feeCm as string,
+        ...(asset !== undefined ? { asset } : {}),
+        ...noteRandomness(rngs),
     };
 }

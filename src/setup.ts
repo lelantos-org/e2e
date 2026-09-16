@@ -17,30 +17,43 @@ export default async function setup() {
         stack.down().finally(() => process.exit(130));
     });
 
-    log("starting postgres + anvil…");
-    const { rpc } = await stack.up();
-    log("anvil ready at", rpc);
+    try {
+        log("starting postgres + anvil…");
+        const { rpc } = await stack.up();
+        log("anvil ready at", rpc);
 
-    log("deploying contracts…");
-    const addrs = await stack.deploy();
-    log("MASP =", addrs.masp);
-    log("tokens =", addrs.tokens);
-    log("swap =", addrs.swap);
-    log("yield =", addrs.yield);
+        log("deploying contracts…");
+        const addrs = await stack.deploy();
+        log("MASP =", addrs.masp);
+        log("tokens =", addrs.tokens);
+        log("swap =", addrs.swap);
+        log("yield =", addrs.yield);
 
-    log("starting backend services…");
-    const urls = await stack.upBackend(addrs);
-    log("urls =", urls);
+        log("starting backend services…");
+        const urls = await stack.upBackend(addrs);
+        log("urls =", urls);
 
-    const e = stack.env(urls);
-    publishEnv(e);
+        const e = stack.env(urls);
+        publishEnv(e);
 
-    // After the services are up and before any test runs: the relayer caches
-    // the indexer's asset table, and the yield ids reach it last. See
-    // `registry-ready.ts`.
-    log("waiting for the relayer to quote every registered asset…");
-    await waitForQuotableAssets(e.relayer, BigInt(e.chainId), registeredAssets(e));
-    log("relayer quotes every registered asset");
+        // After the services are up and before any test runs: the relayer
+        // caches the indexer's asset table, and the yield ids reach it last.
+        // See `registry-ready.ts`.
+        log("waiting for the relayer to quote every registered asset…");
+        await waitForQuotableAssets(e.relayer, BigInt(e.chainId), registeredAssets(e));
+        log("relayer quotes every registered asset");
+    } catch (err) {
+        // Vitest never calls the teardown of a setup that threw, so a half-built
+        // stack would otherwise outlive the run until Ryuk noticed, or forever
+        // with the reaper off. Its logs are dumped on the way down.
+        if (keepAlive()) {
+            log("setup failed; E2E_KEEP_ALIVE=1 leaves the partial stack up (`just down` to clean up)");
+        } else {
+            log("setup failed; tearing down the partial stack…");
+            await stack.down();
+        }
+        throw err;
+    }
 
     return async () => {
         if (keepAlive()) {
@@ -128,13 +141,17 @@ function publishEnv(e: StackEnv): void {
     process.env.PAYER_KEY = e.payerKey;
     process.env.RECIPIENT_ADDRESS = e.recipientAddress;
     process.env.PERMIT2_ADDRESS = e.permit2;
+    process.env.BUNDLER_ADDRESS = e.bundler;
+    process.env.BUNDLER_FACTORY_ADDRESS = e.bundlerFactory;
+    process.env.RELAYER_BUNDLE_MAX_ITEMS = String(e.bundleMaxItems);
+    process.env.EXPLORER_URL = e.explorer;
     if (e.nativeAdapter) process.env.NATIVE_ADAPTER_ADDRESS = e.nativeAdapter;
     if (e.metaquoter) process.env.METAQUOTER_URL = e.metaquoter;
     if (e.swap) {
         process.env.UNIV3_QUOTER_ADDRESS = e.swap.univ3Quoter;
         process.env.UNIV3_ADAPTER_ADDRESS = e.swap.univ3Adapter;
-    process.env.UNIV4_QUOTER_ADDRESS = e.swap.univ4Quoter;
-    process.env.UNIV4_ADAPTER_ADDRESS = e.swap.univ4Adapter;
+        process.env.UNIV4_QUOTER_ADDRESS = e.swap.univ4Quoter;
+        process.env.UNIV4_ADAPTER_ADDRESS = e.swap.univ4Adapter;
         process.env.MOCK_SWAP_ROUTER_ADDRESS = e.swap.mockSwapRouter;
         process.env.SWAP_WRAPPER_ADDRESS = e.swap.wrapper;
     }

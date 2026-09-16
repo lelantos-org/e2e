@@ -6,7 +6,7 @@
 // ids `DeployTest` did, and the relayer reads that table through a 30s cache
 // filled by the first request that needs it. A suite that starts depositing
 // straight after boot can therefore meet a relayer holding a registry of plain
-// ids only, and `Wallet.deposit` refuses the deposit outright:
+// ids only, and `wallet.deposit` refuses the deposit outright:
 //
 //     the relayer charges to flush deposits but quoted no amount for asset 5,
 //     so a deposit in it would never be flushed and would have to be
@@ -19,7 +19,7 @@
 // note is denominated in the asset being moved and there is nothing to fall
 // back to.
 
-import { RelayerClient } from "@lelantos-org/sdk/relayer";
+import { RelayerClient } from "@lelantos-org/sdk/services";
 
 import { TIMEOUT } from "./testkit/timeouts.js";
 import { pollUntil } from "./utils.js";

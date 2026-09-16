@@ -3,7 +3,9 @@
 // Most of the relayer's per-chain config reaches it through env overlays
 // (`RELAYER_CHAIN_<id>_*`), which is why the committed TOML can hold zero
 // addresses. `accepted_fee_tokens` has no such overlay and needs the ERC-20
-// addresses the forge deploy produced, so it is written into the file.
+// addresses the forge deploy produced, so it is written into the file. The
+// bundle size is written in too, from the suite's own environment, so the file
+// the relayer reads is the one place it is set.
 //
 // Rendering rather than committing real addresses: anvil's deploy addresses
 // are deterministic, so hardcoded values would hold until the deploy script
@@ -15,8 +17,29 @@ import { join } from "node:path";
 
 import { CONFIG_DIR, E2E_DIR } from "./docker.js";
 
-/** Placeholder line in `config/relayer.toml` this substitutes. */
+/** Placeholder lines in `config/relayer.toml` this substitutes. */
 const MARKER = "# @ACCEPTED_FEE_TOKENS@";
+const BUNDLE_MARKER = "# @BUNDLE_MAX_ITEMS@";
+
+/**
+ * Most operations the relayer lands in one `Bundler.execute`.
+ *
+ * `E2E_BUNDLE_MAX_ITEMS`, default 8. The suite runs with bundling on: its files
+ * are sequential and mostly produce bundles of one, while
+ * `tests/bundler-mixed.test.ts` holds the batcher to force larger ones and reads
+ * this back as `RELAYER_BUNDLE_MAX_ITEMS` for its cap case. `1` sends every
+ * operation alone. Bounds mirror `MAX_BUNDLE_ITEMS` in the relayer's config.
+ */
+export const BUNDLE_MAX_ITEMS = bundleMaxItems(process.env.E2E_BUNDLE_MAX_ITEMS);
+
+function bundleMaxItems(raw: string | undefined): number {
+    if (raw === undefined || raw === "") return 8;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > 32) {
+        throw new Error(`E2E_BUNDLE_MAX_ITEMS=${raw}: expected an integer in 1..=32`);
+    }
+    return n;
+}
 
 export interface FeeTokenSpec {
     symbol: string;
@@ -41,11 +64,15 @@ export interface FeeTokenSpec {
  */
 export function renderRelayerConfig(feeTokens: FeeTokenSpec[]): string {
     const template = readFileSync(join(CONFIG_DIR, "relayer.toml"), "utf8");
-    if (!template.includes(MARKER)) {
-        throw new Error(`relayer.toml is missing the ${MARKER} placeholder`);
+    for (const marker of [MARKER, BUNDLE_MARKER]) {
+        if (!template.includes(marker)) {
+            throw new Error(`relayer.toml is missing the ${marker} placeholder`);
+        }
     }
 
-    const rendered = template.replace(MARKER, tomlFeeTokens(feeTokens));
+    const rendered = template
+        .replace(MARKER, tomlFeeTokens(feeTokens))
+        .replace(BUNDLE_MARKER, `bundle_max_items = ${BUNDLE_MAX_ITEMS}`);
     const dir = join(E2E_DIR, ".rendered");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, "relayer.toml");

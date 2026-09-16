@@ -5,12 +5,20 @@ import { expect } from "vitest";
 
 import { ethers } from "ethers";
 
-import type { OutputRecipient } from "@lelantos-org/sdk/bundle";
-import type { Field, Jubjub, Poseidon } from "@lelantos-org/sdk/crypto";
-import { FmdClient, type FmdNoteOut } from "@lelantos-org/sdk/fmd-server";
-import { buildSpendingKey, type SpendingKey } from "@lelantos-org/sdk/keys";
+import type { WalletApi } from "@lelantos-org/sdk";
+import { walletInternals } from "@lelantos-org/sdk/internal";
+import {
+    buildSpendingKey,
+    type Field,
+    type Jubjub,
+    type Poseidon,
+    type SpendingKey,
+} from "@lelantos-org/sdk/primitives";
+import type { OutputRecipient } from "@lelantos-org/sdk/protocol";
+import type { FmdClient, FmdNoteOut } from "@lelantos-org/sdk/services";
 
 import { MASP_ABI, MOCK_ERC20_ABI, MOCK_WETH9_ABI } from "./protocol/abi.js";
+import type { BundleItem } from "./protocol/logs.js";
 import { LIST_LIMIT, TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
 import { cmToHex, pollUntil } from "./utils.js";
@@ -75,14 +83,45 @@ export async function setupWeth(
     return erc20Helpers(c);
 }
 
-// Asks for `LIST_LIMIT`, the server's maximum, so a freshly indexed cm is not
-// buried behind older pages.
+/**
+ * Every note fmd has indexed after row `after`, oldest first, a page at a time.
+ *
+ * The server returns rows in id order starting after the cursor, so a single
+ * `listNotes` call only ever sees the oldest page. Every file shares one index,
+ * and a full run passes one page early: from then on a lookup that reads one
+ * page never finds a new note, and one asserting a note is absent always
+ * passes.
+ */
+export async function* fmdNotes(fmd: FmdClient, after = 0): AsyncGenerator<FmdNoteOut> {
+    for (let cursor = after; ; ) {
+        const page = await fmd.listNotes({ limit: LIST_LIMIT, after: cursor });
+        yield* page;
+        if (page.length < LIST_LIMIT) return;
+        cursor = page[page.length - 1].id;
+    }
+}
+
+/** The indexed note with commitment `cm`, if fmd has it. Scans the whole index. */
+export async function findIndexedNote(fmd: FmdClient, cm: Field): Promise<FmdNoteOut | undefined> {
+    for await (const n of fmdNotes(fmd)) if (n.cm === cm) return n;
+    return undefined;
+}
+
+/**
+ * Wait for fmd to index `cm`.
+ *
+ * Each poll resumes from the last row the previous one read: rows are
+ * append-only and in id order, so a note not seen yet can only be further on.
+ */
 export async function waitForCm(fmd: FmdClient, cm: Field): Promise<FmdNoteOut> {
-    const cmHex = cmToHex(cm);
+    let cursor = 0;
     return pollUntil(async () => {
-        const rows = await fmd.listNotes({ limit: LIST_LIMIT });
-        return rows.find((n) => n.cm === cm);
-    }, { label: `fmd notes(${cmHex.slice(0, 12)})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
+        for await (const n of fmdNotes(fmd, cursor)) {
+            if (n.cm === cm) return n;
+            cursor = n.id;
+        }
+        return undefined;
+    }, { label: `fmd notes(${cmToHex(cm).slice(0, 12)})`, timeoutMs: TIMEOUT.POLL_DEFAULT_MS });
 }
 
 /**
@@ -112,10 +151,10 @@ let _feeView: ethers.Contract | undefined;
 /**
  * Fees the pool has accrued for `tokenAddr`, in base units.
  *
- * Assert with `toBeGreaterThanOrEqual`: the counter is cumulative across the
- * run and every test file shares one MASP, so any file depositing or
- * withdrawing the same asset raises it. An exact assertion would encode the
- * file ordering into the test.
+ * Cumulative across the run, since every file shares one MASP: an absolute
+ * lower bound is already met by whatever ran earlier and proves nothing.
+ * Read it before and after the step under test and assert the exact
+ * difference; files run serially, so nothing else moves it in between.
  */
 export async function accruedFee(
     provider: ethers.Provider,
@@ -149,6 +188,26 @@ export function recipientCommitments(r: {
     const own = new Set(r.ownCommitments ?? []);
     const pool = r.nonZeroCommitments ?? r.commitments;
     return pool.filter((c) => !own.has(c));
+}
+
+/**
+ * Assert `w` stored `cm` at a leaf `item` inserted.
+ *
+ * The leaf index comes from the wallet's own fold of the chunk feed, so this
+ * ties what the indexer served back to the operation that wrote it: a feed that
+ * attributed a bundle's leaves to the wrong operation would place the note
+ * outside its item. The leaf index is not on the wallet's public surface, so it
+ * is read through `walletInternals`.
+ */
+export function expectLeafInItem(w: WalletApi, cm: string, item: BundleItem): void {
+    const note = walletInternals(w).file.notes.find((n) => n.cm === cm);
+    expect(note, `note ${cm} stored`).toBeDefined();
+    const leaf = BigInt(note!.leafIndex);
+    const end = item.startIndex + item.inserted;
+    expect(
+        leaf >= item.startIndex && leaf < end,
+        `leaf ${leaf} of ${cm} within ${item.kind} item [${item.startIndex}, ${end})`,
+    ).toBe(true);
 }
 
 export async function expectBalanceDeltas(

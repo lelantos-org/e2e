@@ -19,8 +19,8 @@
 // a rounding mode or a fee base that changed quietly is precisely what should
 // fail a test.
 
-import { RAY } from "@lelantos-org/sdk";
-import type { YieldRate } from "@lelantos-org/sdk";
+import { RAY } from "@lelantos-org/sdk/protocol";
+import type { YieldRate } from "@lelantos-org/sdk/protocol";
 
 import { circuitFee } from "./protocol/amounts.js";
 import type { YieldSnapshot, YieldStateView } from "./yield-harness.js";

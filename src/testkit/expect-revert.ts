@@ -5,13 +5,17 @@
 // chain and decodes known selectors. A bare `rejects.toThrow(/…/)` matches the
 // message only, and most of these reverts do not put their reason there.
 
+import { isWalletError, type WalletErrorCode } from "@lelantos-org/sdk";
+
 import { errorText } from "../protocol/reverts.js";
 
-type ErrorCtor = new (...args: never[]) => Error;
-
 export interface ExpectRevertOpts {
-    class?: ErrorCtor;
-    code?: string;
+    /**
+     * The SDK error code the rejection must carry, checked with
+     * `isWalletError(err, code)`. Omit for a rejection that does not come out of
+     * the SDK wallet (a direct ethers call).
+     */
+    code?: WalletErrorCode;
     match?: RegExp | string;
 }
 
@@ -20,20 +24,21 @@ export interface ExpectRevertOpts {
 // walked so chain reverts wrapped in SDK errors still match.
 export async function expectRevert(
     p: Promise<unknown>,
-    spec?: RegExp | string | ErrorCtor | ExpectRevertOpts,
+    spec?: RegExp | string | ExpectRevertOpts,
 ): Promise<Error> {
-    const err = await capture(p);
-    if (!err) throw new Error("expectRevert: expected promise to reject, but it resolved");
+    const outcome = await capture(p);
+    if (!outcome.rejected) throw new Error("expectRevert: expected promise to reject, but it resolved");
+    // A rejection carrying no error is still a rejection; wrap it so matching
+    // and the returned value have something to work on.
+    const err = outcome.reason instanceof Error
+        ? outcome.reason
+        : new Error(`rejected with non-Error value: ${String(outcome.reason)}`, { cause: outcome.reason });
     if (spec === undefined) return err;
 
     const opts = normalizeSpec(spec);
-    if (opts.class && !(err instanceof opts.class)) {
-        const gotName = (err as Error).constructor?.name ?? typeof err;
-        throw failure(`expected instanceof ${opts.class.name}, got ${gotName}`, err);
-    }
-    const code = (err as { code?: unknown }).code;
-    if (opts.code !== undefined && code !== opts.code) {
-        throw failure(`expected code=${opts.code}, got code=${String(code)}`, err);
+    if (opts.code !== undefined && !isWalletError(err, opts.code)) {
+        const got = isWalletError(err) ? err.code : err.constructor?.name ?? typeof err;
+        throw failure(`expected a WalletError with code=${opts.code}, got ${got}`, err);
     }
     if (opts.match !== undefined) {
         const re = typeof opts.match === "string" ? new RegExp(opts.match) : opts.match;
@@ -43,13 +48,16 @@ export async function expectRevert(
     return err;
 }
 
-async function capture(p: Promise<unknown>): Promise<Error | undefined> {
-    try { await p; return undefined; }
-    catch (e) { return e as Error; }
+async function capture(p: Promise<unknown>): Promise<{ rejected: false } | { rejected: true; reason: unknown }> {
+    try {
+        await p;
+        return { rejected: false };
+    } catch (reason) {
+        return { rejected: true, reason };
+    }
 }
 
 function normalizeSpec(spec: NonNullable<Parameters<typeof expectRevert>[1]>): ExpectRevertOpts {
-    if (typeof spec === "function") return { class: spec };
     if (spec instanceof RegExp || typeof spec === "string") return { match: spec };
     return spec;
 }

@@ -7,7 +7,7 @@
 // flushed but the indexer has not caught up"; the flush event separates them,
 // so a hang points at one service instead of two.
 
-import { DepositStream, type FlushWait } from "@lelantos-org/sdk/relayer";
+import { DepositStream, type FlushWait } from "@lelantos-org/sdk/services";
 
 import { TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";

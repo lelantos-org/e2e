@@ -22,14 +22,24 @@
 //
 // Both are asserted here, and the second is the reason this file exists: a
 // performance fee that silently charged 0%, or charged against principal rather
-// than growth, would leave every other test in the suite passing. The last
-// three cases follow the value the rest of the file only accounts for: out of
-// the venue and into the recipient's hands, and out of the accumulator and into
-// the treasury's.
+// than growth, would leave every other test in the suite passing.
+//
+// The cases, in the order the value moves:
+//
+//   1. the venue earns                   — the index rises, no units are minted
+//   2. alice withdraws                   — paid at the accrued rate, net of fee
+//   3. the same withdrawal, pool-side    — the shortfall drawn from the venue
+//   4. the same withdrawal, fee-side     — perfBps of the gain, none of principal
+//   5. the fee is swept                  — the accumulator paid to the treasury
+//   6. the same sweep, holder-side       — out of the treasury's units only
+//
+// Cases 3, 5 and 6 follow the value the others only account for: out of the
+// venue and into the recipient's hands, and out of the accumulator and into the
+// treasury's.
 
 import { ethers } from "ethers";
 
-import { RAY, toTokenUnitsAtRate } from "@lelantos-org/sdk";
+import { RAY, toTokenUnitsAtRate } from "@lelantos-org/sdk/protocol";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { env, type YieldAssetEnv } from "../src/env.js";
@@ -42,16 +52,15 @@ import {
     expectBalanceDeltas,
     expectPoolSettled,
     expectRelayerPaid,
-    FEE_HEADROOM,
     observeYield,
     scaleFor,
+    shieldedBalance,
     TEST_NSK,
     TEST_TIMEOUT,
     trackedAddrs,
-    withFee,
     YIELD_ASSETS,
 } from "../src/harness.js";
-import { once, setupFile, type SdkWallet } from "../src/fixture.js";
+import { once, type SdkWallet } from "../src/fixture.js";
 import {
     accrueYieldPerf,
     poolTreasury,
@@ -61,6 +70,7 @@ import {
     yieldIndex,
     yieldRate,
 } from "../src/yield-harness.js";
+import { yieldFixture } from "../src/yield-fixture.js";
 import {
     accruePerf,
     BPS,
@@ -95,19 +105,11 @@ describe("yield: accrual and fees on withdraw", () => {
     let ya: YieldAssetEnv;
 
     beforeAll(async () => {
-        const f = await setupFile({
+        ({ alice, erc20, provider, payer, ya } = await yieldFixture({
             nsks: TEST_NSK.yieldWithdraw,
-            fund: [{ asset: ASSET, amount: withFee(DEPOSIT + FEE_HEADROOM, ASSET) }],
-        });
-        ({ alice } = f.w);
-        erc20 = f.token(ASSET);
-        ({ provider, payer } = f.h);
-        ya = env.yield.asset(ASSET);
-
-        // As in `denominated-withdraw`: the relayer's `/chains` carries no
-        // decimals for a mock token, and the yield branch additionally needs
-        // `yieldEnabled` and the pool's `rate` to quote anything at all.
-        await alice.asset(ASSET, { refresh: true });
+            asset: ASSET,
+            deposit: DEPOSIT,
+        }));
     });
 
     const observe = () => observeYield(provider, ya, erc20);
@@ -152,8 +154,8 @@ describe("yield: accrual and fees on withdraw", () => {
         const before = await observe();
 
         const r = await alice.withdraw({
-            to: env.recipientAddress,
-            amount: WITHDRAW,
+            recipient: env.recipientAddress,
+            gross: WITHDRAW,
             asset: ASSET,
         });
         await awaitOwn(alice, r);
@@ -176,9 +178,10 @@ describe("yield: accrual and fees on withdraw", () => {
 
         // The shielded balance is a unit count and does not move either, but
         // those units are now worth more than they cost.
-        expect(alice.balance(ASSET)).toBe(DEPOSIT);
+        const held = await shieldedBalance(alice, ASSET);
+        expect(held).toBe(DEPOSIT);
         expect(
-            toTokenUnitsAtRate(alice.balance(ASSET), SCALE, after, { round: "down" }),
+            toTokenUnitsAtRate(held, SCALE, after, { round: "down" }),
             "the depositor's units revalue with the venue",
         ).toBeGreaterThan(baseAmt(DEPOSIT, ASSET));
     }, TEST_TIMEOUT.SEQUENCE);
@@ -207,7 +210,7 @@ describe("yield: accrual and fees on withdraw", () => {
         // separate fee note — the protocol fee comes out of what left, not out
         // of what stayed.
         const { fee } = await withdrawn();
-        expect(alice.balance(ASSET)).toBe(DEPOSIT - WITHDRAW - fee);
+        expect(await shieldedBalance(alice, ASSET)).toBe(DEPOSIT - WITHDRAW - fee);
     }, TEST_TIMEOUT.SEQUENCE);
 
     it("draws the shortfall from the venue and refills the buffer", async () => {
@@ -277,8 +280,8 @@ describe("yield: accrual and fees on withdraw", () => {
         // floored, so the treasury lands at or just below `cut`, never above.
         const supply = supplyAfterAccrual(before, SCALE);
         const treasury = (units * rate.gross) / supply;
-        /// One normalized unit, at the post-accrual rate. The floor above can
-        /// cost the treasury up to this much, and nothing can cost it more.
+        // One normalized unit, at the post-accrual rate. The floor above can
+        // cost the treasury up to this much, and nothing can cost it more.
         const perUnit = rate.gross / supply;
 
         expect(treasury, "the treasury never takes more than its cut").toBeLessThanOrEqual(cut);
@@ -296,8 +299,9 @@ describe("yield: accrual and fees on withdraw", () => {
         ).toBeLessThanOrEqual(perUnit);
 
         // And alice's own remaining units are worth more than they cost her.
-        const kept = toTokenUnitsAtRate(alice.balance(ASSET), SCALE, after.rate, { round: "down" });
-        expect(kept).toBeGreaterThan(baseAmt(alice.balance(ASSET), ASSET));
+        const remaining = await shieldedBalance(alice, ASSET);
+        const kept = toTokenUnitsAtRate(remaining, SCALE, after.rate, { round: "down" });
+        expect(kept).toBeGreaterThan(baseAmt(remaining, ASSET));
     }, TEST_TIMEOUT.SEQUENCE);
 
     /**
@@ -356,15 +360,19 @@ describe("yield: accrual and fees on withdraw", () => {
         });
         expect(after.state.accruedFeeNormalized, "the accumulator is cleared").toBe(0n);
 
-        // Settlement is lazy precisely so it can be served out of the buffer:
-        // the treasury's cut is a fraction of a gain, which is a fraction of
-        // the pool, so a sweep should not have to reach the venue at all.
+        // A sweep settles through `_ensureIdle` like any withdrawal
+        // (`YieldOps.sweepNormalized`), so both outcomes are the contract
+        // working: a sweep the buffer covers leaves the venue alone and spends
+        // the buffer down, and one it does not redeems the shortfall plus the
+        // buffer's refill from the venue. Which one runs follows from this
+        // file's own sizing; each is asserted exactly.
         if (fee.amount <= before.state.idle) {
             expect(venueAssets(after), "the buffer covered it").toBe(venueAssets(before));
             expect(after.state.idle, "and was spent down for it").toBe(
                 before.state.idle - fee.amount,
             );
         } else {
+            expect(venueAssets(after), "the venue paid the shortfall").toBeLessThan(venueAssets(before));
             expect(after.state.idle, "and the buffer was refilled on the way out").toBe(
                 refillFor(before.rate.gross, fee.amount, before.state.bufferBps),
             );
@@ -387,7 +395,7 @@ describe("yield: accrual and fees on withdraw", () => {
         // Which leaves what alice holds worth what it was worth. Within a unit,
         // because the payout is floored and the remainder stays behind as
         // surplus backing rather than following the treasury out.
-        const held = alice.balance(ASSET);
+        const held = await shieldedBalance(alice, ASSET);
         expect(
             absDiff(
                 toTokenUnitsAtRate(held, SCALE, after.rate, { round: "down" }),

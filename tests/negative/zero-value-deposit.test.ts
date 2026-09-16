@@ -1,12 +1,12 @@
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
     amt,
     ASSET,
     expectRevert,
+    isWalletError,
     TEST_NSK,
     TEST_TIMEOUT,
-    WalletError,
     withFee,
 } from "../../src/harness.js";
 import { setupFile, type SdkWallet } from "../../src/fixture.js";
@@ -24,10 +24,14 @@ describe("negative: zero-value deposit", () => {
         }));
     });
 
-    it("Wallet.deposit({ amount: 0n }) rejects", async () => {
-        await expectRevert(
+    it("wallet.deposit({ amount: 0 }) rejects", async () => {
+        // Refused before any I/O, as an invalid argument naming the amount.
+        const err = await expectRevert(
             alice.deposit({ amount: amt(0n), asset: ASSET }),
-            { class: WalletError, match: /amount|zero|positive|nonzero/i },
+            { code: "INVALID_ARGUMENT" },
         );
+        // Already checked by `expectRevert`; repeated to narrow `err`.
+        if (!isWalletError(err, "INVALID_ARGUMENT")) throw err;
+        expect(err.argument).toBe("amount");
     }, TEST_TIMEOUT.LOCAL);
 });

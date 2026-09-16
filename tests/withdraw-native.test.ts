@@ -2,23 +2,20 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../src/env.js";
 import {
-    accruedFee,
     amt,
     ASSETS,
-    awaitOwn,
-    baseAmt,
-    expectRelayerPaid,
-    expectRelayerPaidOnDeposit,
-    scaleFor,
+    depositTotal,
     feeFor,
-    type Erc20Helpers,
     type Harness,
-    snapshotBalances,
+    netOfGross,
+    shieldedBalance,
+    spendItem,
     TEST_NSK,
     TEST_TIMEOUT,
     withFee,
 } from "../src/harness.js";
 import { once, setupFile, type SdkWallet } from "../src/fixture.js";
+import { depositStep, withdrawStep } from "../src/testkit/steps.js";
 
 const ASSET_WETH = ASSETS.WETH;
 const DEPOSIT_WETH = amt(20n);
@@ -26,29 +23,14 @@ const WITHDRAW_WETH = amt(8n);
 
 const SHIELD_FEE = feeFor(DEPOSIT_WETH, ASSET_WETH);
 const UNSHIELD_FEE = feeFor(WITHDRAW_WETH, ASSET_WETH);
-// Since SDK 0.28 `amount` is the gross, so publicOut == WITHDRAW_WETH and the
-// recipient receives it less the unshield fee.
-const NET_WITHDRAW = baseAmt(WITHDRAW_WETH, ASSET_WETH) - UNSHIELD_FEE;
+const NET_WITHDRAW = netOfGross(WITHDRAW_WETH, ASSET_WETH);
 
-interface Snapshot {
-    weth: Record<string, bigint>;
-    recipientEth: bigint;
-}
-
-describe("withdraw native ETH (WETH unwrap)", () => {
+// The unwrap goes through `NativeAdapter`, which is deployed only when the
+// stack includes a wrapped-native token. Skipping rather than failing makes a
+// partial stack report "not exercised" instead of "broken".
+describe.skipIf(!env.nativeAdapterAddress)("withdraw native ETH (WETH unwrap)", () => {
     let h: Harness;
     let alice: SdkWallet;
-    let weth: Erc20Helpers;
-
-    /// WETH balances for the tracked accounts plus the recipient's raw ETH.
-    /// This path delivers value as coin rather than token, so both have to be
-    /// observed in the same snapshot.
-    async function snap(): Promise<Snapshot> {
-        return {
-            weth: await snapshotBalances(weth),
-            recipientEth: await h.provider.getBalance(env.recipientAddress),
-        };
-    }
 
     beforeAll(async () => {
         const f = await setupFile({
@@ -57,54 +39,47 @@ describe("withdraw native ETH (WETH unwrap)", () => {
         });
         ({ h } = f);
         ({ alice } = f.w);
-        weth = f.token(ASSET_WETH);
     });
 
-    const deposited = once(async () => {
-        const before = await snap();
-        const r = await alice.deposit({ amount: DEPOSIT_WETH, asset: ASSET_WETH });
-        await awaitOwn(alice, r);
-        const relayerFee = await expectRelayerPaidOnDeposit(h.provider, r.txHash, ASSET_WETH);
-        return { before, relayerFee, after: await snap() };
-    });
+    const deposited = once(() => depositStep(h, alice, { amount: DEPOSIT_WETH, asset: ASSET_WETH }));
 
     const withdrawn = once(async () => {
         await deposited();
-        const before = await snap();
-        const r = await alice.withdrawEth({
-            to: env.recipientAddress,
-            amount: WITHDRAW_WETH,
-            asset: ASSET_WETH,
-        });
-        await awaitOwn(alice, r);
-        return { before, fee: await expectRelayerPaid(r, ASSET_WETH), after: await snap() };
+        // This path delivers value as coin rather than token, so the recipient's
+        // raw ETH is tracked alongside the WETH balances.
+        return withdrawStep(
+            h,
+            alice,
+            { recipient: env.recipientAddress, gross: WITHDRAW_WETH, asset: ASSET_WETH, native: true },
+            { eth: { recipient: env.recipientAddress } },
+        );
     });
 
     it("deposit WETH (shield leg)", async () => {
-        const { before, relayerFee, after } = await deposited();
-        const moved =
-            baseAmt(DEPOSIT_WETH, ASSET_WETH) +
-            SHIELD_FEE +
-            relayerFee * scaleFor(ASSET_WETH);
-        expect(after.weth.payer - before.weth.payer).toBe(-moved);
-        expect(after.weth.masp - before.weth.masp).toBe(moved);
-        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH);
-    }, TEST_TIMEOUT.SPEND);
+        const { erc20, fee } = await deposited();
+        const moved = depositTotal(DEPOSIT_WETH, fee, ASSET_WETH);
+        expect(erc20.payer).toBe(-moved);
+        expect(erc20.masp).toBe(moved);
+        expect(await shieldedBalance(alice, ASSET_WETH)).toBe(DEPOSIT_WETH);
+    }, TEST_TIMEOUT.DEPOSIT);
 
-    it("withdrawEth — recipient receives raw ETH (no WETH delta)", async () => {
-        const { before, fee, after } = await withdrawn();
-        expect(after.recipientEth - before.recipientEth).toBe(NET_WITHDRAW);
-        expect(after.weth.recipient - before.weth.recipient, "arrives as coin, not token").toBe(0n);
-        expect(before.weth.masp - after.weth.masp).toBe(NET_WITHDRAW);
+    it("withdraw native — recipient receives raw ETH (no WETH delta)", async () => {
+        const { r, erc20, eth, fee } = await withdrawn();
+        expect(eth.recipient).toBe(NET_WITHDRAW);
+        expect(erc20.recipient, "arrives as coin, not token").toBe(0n);
+        expect(erc20.masp).toBe(-NET_WITHDRAW);
+        // Landed through the adapter's unwrap, not as a plain unshield that
+        // happened to pay the same amount.
+        expect((await spendItem(h.provider, r)).kind).toBe("withdrawNative");
         // The relayer's fee stays in the pool as a note, so it appears only in
         // what alice has left, never in the public deltas above.
-        expect(alice.balance(ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
-    }, TEST_TIMEOUT.SPEND);
+        expect(await shieldedBalance(alice, ASSET_WETH)).toBe(DEPOSIT_WETH - WITHDRAW_WETH - fee);
+    }, TEST_TIMEOUT.SEQUENCE);
 
     it("MASP accrues shield + unshield fees in WETH", async () => {
-        await withdrawn();
-        // Lower bound: the counter is cumulative on a shared MASP.
-        expect(await accruedFee(h.provider, env.token1))
-            .toBeGreaterThanOrEqual(SHIELD_FEE + UNSHIELD_FEE);
-    }, TEST_TIMEOUT.SPEND);
+        const shield = await deposited();
+        const unshield = await withdrawn();
+        expect(shield.accrued, "shield fee").toBe(SHIELD_FEE);
+        expect(unshield.accrued, "unshield fee").toBe(UNSHIELD_FEE);
+    }, TEST_TIMEOUT.SEQUENCE);
 });

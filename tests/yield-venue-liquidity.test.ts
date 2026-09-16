@@ -42,23 +42,22 @@ import {
     expectBalanceDeltas,
     expectPoolSettled,
     expectRelayerPaid,
-    FEE_HEADROOM,
     type Observed,
     observeYield,
     scaleFor,
     TEST_NSK,
     TEST_TIMEOUT,
     trackedAddrs,
-    withFee,
     YIELD_ASSETS,
 } from "../src/harness.js";
-import { once, setupFile, type SdkWallet } from "../src/fixture.js";
+import { once, type SdkWallet } from "../src/fixture.js";
 import {
     LIQUIDITY_UNCAPPED,
     setVaultLiquidityCap,
     venueAssets,
     yieldSnapshot,
 } from "../src/yield-harness.js";
+import { yieldFixture } from "../src/yield-fixture.js";
 import { refillFor, unshieldNet } from "../src/yield-mirror.js";
 
 /** The lending id for WETH — plain id 1's token, registered again at 4. */
@@ -96,23 +95,18 @@ describe("yield: where a withdrawal's tokens come from", () => {
     let ya: YieldAssetEnv;
 
     beforeAll(async () => {
-        const f = await setupFile({
+        ({ alice, erc20, provider, payer, ya } = await yieldFixture({
             nsks: TEST_NSK.yieldLiquidity,
-            fund: [{ asset: ASSET, amount: withFee(DEPOSIT + FEE_HEADROOM, ASSET) }],
-        });
-        ({ alice } = f.w);
-        erc20 = f.token(ASSET);
-        ({ provider, payer } = f.h);
-        ya = env.yield.asset(ASSET);
-
-        // The relayer's `/chains` carries no decimals for a mock token, and the
-        // yield branch additionally needs `yieldEnabled` and the pool's `rate`
-        // to quote anything at all.
-        await alice.asset(ASSET, { refresh: true });
+            asset: ASSET,
+            deposit: DEPOSIT,
+        }));
     });
 
     // Restores the shared vault whether or not the capped case got that far.
+    // A `beforeAll` that failed before assigning these never capped anything,
+    // and throwing here would bury its error under a TypeError.
     afterAll(async () => {
+        if (payer === undefined || ya === undefined) return;
         await setVaultLiquidityCap(payer, ya, LIQUIDITY_UNCAPPED);
     });
 
@@ -129,7 +123,7 @@ describe("yield: where a withdrawal's tokens come from", () => {
         const before = await observe();
         const net = unshieldNet(amount, before, SCALE);
 
-        const r = await alice.withdraw({ to: env.recipientAddress, amount, asset: ASSET });
+        const r = await alice.withdraw({ recipient: env.recipientAddress, gross: amount, asset: ASSET });
         await awaitOwn(alice, r);
         // Read as the relayer, not as the payer: a fee note the relayer cannot
         // recover leaves every balance below correct and the relayer unpaid.

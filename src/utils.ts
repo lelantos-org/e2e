@@ -1,11 +1,13 @@
-import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk/crypto";
+import { BABYJUB_SUBGROUP_ORDER, type Field } from "@lelantos-org/sdk/primitives";
 
 /** A field element as a 0x-prefixed 32-byte hex string. */
 export function cmToHex(v: Field): string {
     return "0x" + v.toString(16).padStart(64, "0");
 }
 
-// LCG scalar source in 𝔽_subgroup; same seed yields the same sequence.
+// Deterministic scalar source in 𝔽_subgroup: a multiplicative hash of an
+// incrementing counter, so the same seed yields the same sequence. Seeds `s`
+// and `s + k` share all but the first `k` draws; keep seeds far apart.
 export function counter(seed: bigint): () => Field {
     let n = seed;
     return () => {
@@ -34,9 +36,14 @@ export function waitForSignal(): Promise<void> {
  * refused, not yet indexed) are expected to fail until the service is ready.
  * The last one is reported on timeout, which distinguishes "the service never
  * came up" from "the row never landed" and from a bug in the predicate.
+ *
+ * Each attempt races the time left, and `signal` aborts when it runs out. A
+ * predicate stuck on a request that never answers would otherwise hold the
+ * poll past its budget until vitest killed the test, and the diagnostic above
+ * would never print. Predicates that do I/O should pass `signal` on.
  */
 export async function pollUntil<T>(
-    predicate: () => Promise<T | null | undefined>,
+    predicate: (signal: AbortSignal) => Promise<T | null | undefined>,
     opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
 ): Promise<T> {
     const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -47,14 +54,25 @@ export async function pollUntil<T>(
     let attempts = 0;
     while (true) {
         attempts++;
+        const budget = new AbortController();
+        const timer = setTimeout(
+            () => budget.abort(new Error(`attempt ${attempts} still pending when the budget ran out`)),
+            Math.max(timeoutMs - (Date.now() - start), 1),
+        );
         try {
-            const v = await predicate();
+            const attempt = predicate(budget.signal);
+            // An attempt that loses the race can still reject later; that is
+            // not a failure of the run.
+            attempt.catch(() => undefined);
+            const v = await Promise.race([attempt, aborted(budget.signal)]);
             if (v) return v;
             lastErr = undefined;
         } catch (e) {
             lastErr = e;
+        } finally {
+            clearTimeout(timer);
         }
-        if (Date.now() - start > timeoutMs) {
+        if (Date.now() - start >= timeoutMs) {
             const elapsed = Date.now() - start;
             const why = lastErr === undefined
                 ? "predicate never returned a value"
@@ -68,6 +86,13 @@ export async function pollUntil<T>(
         }
         await new Promise((r) => setTimeout(r, intervalMs));
     }
+}
+
+/** Rejects with the signal's reason once it aborts; never resolves. */
+export function aborted(signal: AbortSignal): Promise<never> {
+    return new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
 }
 
 function summarize(e: unknown): string {

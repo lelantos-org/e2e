@@ -27,9 +27,16 @@
 // turn on rounding. Zero is short of any positive requirement; the exact
 // boundary is a unit test's job.
 //
-// Each case cancels its skipped deposit before returning: the suite shares one
-// stack, and an escrowed deposit left behind is one the relayer keeps
+// Each case cancels its skipped deposits before returning, and an
+// `EscrowJanitor` cancels whatever a failed assertion left behind: the suite
+// shares one stack, and an escrowed deposit left behind is one the relayer keeps
 // reconsidering for the rest of the run.
+//
+// One of those cancels goes through `wallet.cancelDeposit({ depositId,
+// fromBlock })` rather than the raw ABI, so the escrow the pool dropped at
+// submit is rebuilt from its `DepositEscrowed` log. That is the only way out for
+// a payer who kept the id and not the deposit result, and this file is where it
+// belongs: it is the one that deliberately creates escrows nothing will flush.
 //
 // The last case is the one that pins the relayer's liveness. `pop_pending`
 // orders oldest-first, so deposits the relayer declines sit at the head of the
@@ -37,30 +44,29 @@
 // (`services::pipeline::deposit_failures`), and without that a full window of
 // them fills the batch and no later deposit on the chain ever flushes.
 
-import { ethers } from "ethers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { env } from "../../src/env.js";
 import {
     amt,
     ASSET,
-    baseAmt,
-    buildDeposit,
+    buildDirectDeposit,
     cancelDepositAfterDelay,
     type CircuitWallet,
     counter,
+    createTestWallet,
     depositTotal,
-    FEE_HEADROOM,
-    feeFor,
+    EscrowJanitor,
+    escrowOf,
+    findIndexedNote,
     type Harness,
+    isEscrowed,
     makeWallet,
+    mineIfAnvil,
     newAuxRng,
     quoteDepositFee,
     relayerFeeNote,
-    rngForOutput,
-    scaleFor,
     submitDepositDirect,
-    SYNC_LIMIT,
     TEST_NSK,
     TEST_TIMEOUT,
     unflushableFee,
@@ -68,7 +74,7 @@ import {
     waitForCm,
     withFee,
 } from "../../src/harness.js";
-import { setupFile } from "../../src/fixture.js";
+import { setupFile, type SdkWallet } from "../../src/fixture.js";
 
 const { alice: ALICE_NSK } = TEST_NSK.negDepositFee;
 const DEPOSIT = amt(10n);
@@ -82,65 +88,113 @@ type Underpayment = "addressed elsewhere" | "worth nothing";
 describe("negative: deposit whose fee note does not pay the relayer", () => {
     let h: Harness;
     let alice: CircuitWallet;
+    /**
+     * An SDK wallet on the same key, for the one cancel that goes through
+     * `wallet.cancelDeposit` rather than the raw ABI.
+     *
+     * Never used to deposit — that is exactly what `setupFile` is given no
+     * `nsks` for — but the cancel path is the payer's, and the payer here is the
+     * wallet's own EOA, so the refund lands in the same account either way.
+     */
+    let payerWallet: SdkWallet;
+    let janitor: EscrowJanitor | undefined;
     const rng = counter(0xe3_a1ce_0001n);
     const auxRng = newAuxRng(0xe3_add_0001n);
 
     beforeAll(async () => {
-        // No `nsks`: the SDK `Wallet` prices its fee note off
+        // No `nsks`: the SDK wallet prices its fee note off
         // `/v1/deposit/estimate` and would always pay it, so these deposits go
-        // through the direct `buildDeposit` path with a raw key bundle.
+        // through the direct `buildDirectDeposit` path with a raw key bundle.
         ({ h } = await setupFile({
-            fund: [{ asset: ASSET, amount: withFee(DEPOSIT * DEPOSITS + FEE_HEADROOM) }],
+            // `fundPayerForAsset` adds the relayer-fee headroom on top.
+            fund: [{ asset: ASSET, amount: withFee(DEPOSIT * DEPOSITS) }],
         }));
         alice = makeWallet(h.P, h.J, ALICE_NSK);
+        payerWallet = await createTestWallet(ALICE_NSK);
+        janitor = new EscrowJanitor(h);
     });
+
+    afterAll(() => janitor?.drain());
 
     /**
      * Build one deposit of `DEPOSIT` and submit it, paying `feeValue` to the
      * relayer, or nothing to anyone when `fee` is an `Underpayment`.
      *
-     * Serial by construction: every call draws from the shared counters, and
-     * `buildDeposit` consumes them in a fixed order, so interleaving two builds
-     * makes reruns diverge.
+     * Serial by construction: every call draws from the shared counters in a
+     * fixed order, so interleaving two builds makes reruns diverge.
+     *
+     * An underpaying deposit is handed to the janitor as soon as it lands, so
+     * a failed assertion before the case's own cancel cannot strand it.
      */
     async function submit(fee: bigint | Underpayment) {
         // A note addressed to Alice is one the relayer decrypts as `NotOurs`;
         // one addressed to the relayer and worth nothing is ours and short.
         const feeValue = typeof fee === "bigint" ? fee : 0n;
-        const built = buildDeposit({
-            ...h.bundleCommon(ASSET),
-            publicIn: DEPOSIT,
+        const built = buildDirectDeposit(h, {
+            amount: DEPOSIT,
             recipient: alice.recipient,
-            output0: {
-                rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(),
-                aux: rngForOutput(auxRng),
-            },
-            fee: fee === "addressed elsewhere"
-                ? unflushableFee(alice.recipient, { rng, auxRng })
-                : relayerFeeNote(h.J, feeValue, { rng, auxRng }),
+            rngs: { rng, auxRng },
+            fee: (rngs) => fee === "addressed elsewhere"
+                ? unflushableFee(alice.recipient, rngs)
+                : relayerFeeNote(h.J, feeValue, rngs),
         });
-        const r = await submitDepositDirect({
-            payer: h.payer,
-            deposit: built.deposit,
-            aux: built.aux,
-            feeAux: built.feeAux,
-            tokenAddr: env.token2,
-            // Permit2 signs over what the pool will actually pull, so an
-            // underpaying deposit permits less rather than over-permitting and
-            // hiding a wrong charge.
-            maxTotal: depositTotal(DEPOSIT, feeValue),
-        });
+        // Permit2 signs over what the pool will actually pull (the default
+        // `maxTotal`), so an underpaying deposit permits less rather than
+        // over-permitting and hiding a wrong charge.
+        const r = await submitDepositDirect(h, built);
+        if (typeof fee !== "bigint") janitor?.track(r.txHash);
         return { ...r, cm: built.cm, feeValue };
     }
 
-    /** Nonzero exactly while the deposit is still escrowed; see `MASP.escrowed`. */
-    async function stillEscrowed(depositId: bigint): Promise<boolean> {
-        return (await h.masp.escrowed(depositId)) !== ethers.ZeroHash;
+    /**
+     * Cancel an escrowed deposit and assert the refund is the whole debit: no
+     * leaf was minted, so the relayer fee was never earned either.
+     */
+    async function cancelAndExpectRefund(d: Awaited<ReturnType<typeof submit>>) {
+        const { refunded } = await cancelDepositAfterDelay(h, d.txHash);
+        expect(refunded, `refund of deposit ${d.depositId}`).toBe(depositTotal(DEPOSIT, d.feeValue));
+        expect(await isEscrowed(h.provider, d.depositId), "cancel cleared the escrow slot").toBe(false);
     }
 
-    async function indexedCms(): Promise<Set<bigint>> {
-        const rows = await h.fmd.listNotes({ limit: SYNC_LIMIT });
-        return new Set(rows.map((n) => n.cm));
+    /**
+     * The same cancel, through `wallet.cancelDeposit({ depositId, fromBlock })`.
+     *
+     * The escrow object is deliberately not passed: the pool drops the digest
+     * preimage at submit, so this path makes the SDK rebuild every cancel
+     * argument from the `DepositEscrowed` log alone
+     * (`sdk/src/wallet/ops/cancel-deposit.ts:52-72`). That is the recovery a
+     * payer who lost the deposit result has, and a wrong rebuild reverts
+     * `DigestMismatch` rather than refunding someone else.
+     *
+     * `fromBlock` is the test's own starting block: the SDK's default look-back
+     * is the tip minus the cancel delay and a margin, and the delay here is
+     * mined through rather than waited out, so the tip is far past the log.
+     */
+    async function cancelViaSdkFromLogs(
+        d: Awaited<ReturnType<typeof submit>>,
+        fromBlock: number,
+    ): Promise<void> {
+        // The SDK sends as soon as it is asked, so the cancel block has to be
+        // reached first; `cancelDepositAfterDelay` does this for the raw path.
+        const escrow = await escrowOf(h.provider, d.txHash);
+        const behind = escrow.cancellableAtBlock - (await h.provider.getBlockNumber());
+        if (behind > 0) await mineIfAnvil(h.provider, behind);
+
+        const c = await payerWallet.cancelDeposit({
+            depositId: d.depositId,
+            fromBlock: BigInt(fromBlock),
+        });
+        expect(c.depositId).toBe(d.depositId);
+        expect(c.native, "an ERC-20 escrow, cancelled on the pool itself").toBe(false);
+        expect(c.refunded.asset).toBe(ASSET);
+        // The same figure the raw path asserts: no leaf was minted, so the whole
+        // debit comes back, the relayer's unearned note included.
+        expect(c.refunded.baseUnits, `refund of deposit ${d.depositId}`)
+            .toBe(depositTotal(DEPOSIT, d.feeValue));
+        // The fee note is in the deposit's own asset, so it rides in `refunded`
+        // and the pool's two-token path is not taken.
+        expect(c.feeRefunded, "no second token to refund").toBeNull();
+        expect(await isEscrowed(h.provider, d.depositId), "cancel cleared the escrow slot").toBe(false);
     }
 
     /**
@@ -159,39 +213,25 @@ describe("negative: deposit whose fee note does not pay the relayer", () => {
 
         // Flushed and indexed: from here, "not flushed" is a decision the
         // relayer took about `skipped` while it was pending.
-        await waitForBatchFlushTx({
-            provider: h.provider,
-            masp: h.masp,
-            maspAddress: env.maspAddress,
-            fromBlock: startBlock,
-            wantedIds: [paid.depositId],
-        });
+        await waitForBatchFlushTx(h, { fromBlock: startBlock, wantedIds: [paid.depositId] });
         await waitForCm(h.fmd, paid.cm);
 
         expect(
-            await stillEscrowed(skipped.depositId),
+            await isEscrowed(h.provider, skipped.depositId),
             `a fee note ${fee} was flushed although the relayer quoted ${required}`,
         ).toBe(true);
         // Both leaves enter the tree in the flush the relayer declined to do,
-        // so an indexed note would mean it was flushed after all.
+        // so an indexed note would mean it was flushed after all. The whole
+        // index is scanned: `paid` is indexed, so a note flushed with it would
+        // be too, wherever its row falls.
         expect(
-            (await indexedCms()).has(skipped.cm),
+            await findIndexedNote(h.fmd, skipped.cm),
             `the note of a deposit whose fee is ${fee} reached the tree`,
-        ).toBe(false);
+        ).toBeUndefined();
 
         // The way out, and the reason the next case starts from an empty flush
-        // window. The refund is the whole debit: no leaf was minted, so the
-        // relayer fee was never earned either.
-        const { refunded } = await cancelDepositAfterDelay({
-            provider: h.provider,
-            payer: h.payer,
-            maspAddress: env.maspAddress,
-            txHash: skipped.txHash,
-        });
-        expect(refunded).toBe(
-            baseAmt(DEPOSIT) + feeFor(DEPOSIT) + skipped.feeValue * scaleFor(ASSET),
-        );
-        expect(await stillEscrowed(skipped.depositId), "cancel cleared the escrow slot").toBe(false);
+        // window.
+        await cancelAndExpectRefund(skipped);
     }
 
     it("skips a deposit whose fee note is addressed elsewhere, and the payer cancels it", async () => {
@@ -218,23 +258,17 @@ describe("negative: deposit whose fee note does not pay the relayer", () => {
         ];
         const paid = await submit(required);
 
-        await waitForBatchFlushTx({
-            provider: h.provider,
-            masp: h.masp,
-            maspAddress: env.maspAddress,
-            fromBlock: startBlock,
-            wantedIds: [paid.depositId],
-        });
+        await waitForBatchFlushTx(h, { fromBlock: startBlock, wantedIds: [paid.depositId] });
         await waitForCm(h.fmd, paid.cm);
 
-        for (const b of blocking) {
-            expect(await stillEscrowed(b.depositId), "a blocking deposit was flushed").toBe(true);
-            await cancelDepositAfterDelay({
-                provider: h.provider,
-                payer: h.payer,
-                maspAddress: env.maspAddress,
-                txHash: b.txHash,
-            });
+        for (const [i, b] of blocking.entries()) {
+            expect(await isEscrowed(h.provider, b.depositId), "a blocking deposit was flushed").toBe(true);
+            // One of them is reclaimed the way a payer who kept only the deposit
+            // id would have to: the SDK rebuilds the escrow from the pool's log.
+            // The rest go through the raw ABI, which is what pins that the two
+            // paths refund the same amount.
+            if (i === 0) await cancelViaSdkFromLogs(b, startBlock);
+            else await cancelAndExpectRefund(b);
         }
     }, TEST_TIMEOUT.SEQUENCE);
 });

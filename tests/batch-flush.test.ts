@@ -1,7 +1,12 @@
 // Asserts the relayer drains N pending DepositEscrowed events into one
-// flushBatch tx: DepositFlushed × N, and RootAdvanced with inserted = 2N, since
-// a deposit occupies two leaves — the depositor's note and the note paying
+// flushBatch call: DepositFlushed × N, and RootAdvanced with inserted = 2N,
+// since a deposit occupies two leaves — the depositor's note and the note paying
 // whoever flushed it.
+//
+// The call, not the transaction: the relayer lands operations through its
+// Bundler, so a flush can share a transaction with spends or another flush.
+// Every assertion reads the flush's own item (`bundleItems`), never
+// receipt-wide counts.
 //
 // N is the contract's ceiling. `MAX_L_BATCH = 8` counts leaves and is pinned by
 // the batch circuit's `COUNT_BITS = 3`, so one flush carries at most
@@ -15,15 +20,16 @@ import { env } from "../src/env.js";
 import {
     amt,
     ASSET,
-    buildDeposit,
+    buildDirectDeposit,
+    cmToHex,
     counter,
     expectRelayerPaidOnCommitment,
+    FEE_HEADROOM,
     type Harness,
+    LEAVES_PER_DEPOSIT,
     makeWallet,
-    MASP_ABI,
     newAuxRng,
-    parseContractLogs,
-    rngForOutput,
+    txBundleItems,
     quoteDepositFee,
     relayerFeeNote,
     submitDepositDirect,
@@ -32,8 +38,6 @@ import {
     TEST_TIMEOUT,
     waitForBatchFlushTx,
     waitForCm,
-    depositTotal,
-    FEE_HEADROOM,
     withFee,
 } from "../src/harness.js";
 import { setupFile } from "../src/fixture.js";
@@ -54,7 +58,7 @@ describe("batch flush", () => {
 
     beforeAll(async () => {
         // No `nsks`: this file drives the circuit builders directly rather
-        // than the SDK `Wallet`, so it needs a raw key bundle.
+        // than the SDK wallet, so it needs a raw key bundle.
         ({ h } = await setupFile({
             fund: [
                 {
@@ -66,25 +70,27 @@ describe("batch flush", () => {
         alice = makeWallet(h.P, h.J, ALICE_NSK);
     });
 
-    /// Group every `DepositFlushed` since `fromBlock` by the tx that emitted
-    /// it. Used only to explain a failure: if the relayer drained the N intents
-    /// across two batches, a bare "expected 2, got 1" says nothing, while
-    /// `tx 0xab… -> [1] | tx 0xcd… -> [2]` shows that the submissions straddled
-    /// a flush tick.
+    /// Group every `DepositFlushed` since `fromBlock` by the flush operation
+    /// that emitted it. Used only to explain a failure: if the relayer drained
+    /// the N intents across two batches, a bare "expected 2, got 1" says
+    /// nothing, while `tx 0xab…#0 -> [1] | tx 0xcd…#1 -> [2]` shows that the
+    /// submissions straddled a flush tick. The `#k` is the operation's position
+    /// in its transaction, so two flushes bundled together read as two groups.
     async function flushGrouping(fromBlock: number): Promise<string> {
-        const masp = new ethers.Contract(env.maspAddress, MASP_ABI, h.provider);
         const logs = await h.provider.getLogs({
             address: env.maspAddress,
-            topics: [masp.interface.getEvent("DepositFlushed")!.topicHash],
+            topics: [h.masp.interface.getEvent("DepositFlushed")!.topicHash],
             fromBlock,
             toBlock: "latest",
         });
-        const byTx = new Map<string, string[]>();
-        for (const log of logs) {
-            const id = BigInt(log.topics[1]).toString();
-            byTx.set(log.transactionHash, [...(byTx.get(log.transactionHash) ?? []), id]);
+        const groups: string[] = [];
+        for (const tx of new Set(logs.map((l) => l.transactionHash))) {
+            const { items } = await txBundleItems(h.provider, tx);
+            for (const item of items.filter((i) => i.kind === "flush")) {
+                groups.push(`${tx.slice(0, 10)}…#${item.index} -> [${item.depositIds}]`);
+            }
         }
-        return [...byTx].map(([tx, ids]) => `${tx.slice(0, 10)}… -> [${ids}]`).join(" | ");
+        return groups.join(" | ");
     }
 
     // Retried because the relayer flushes on a fixed 5s tick
@@ -106,20 +112,13 @@ describe("batch flush", () => {
         // deposit in the batch identically.
         const feeValue = await quoteDepositFee(h.relayer, env.chainId, ASSET);
         const builts = Array.from({ length: N }, () =>
-            buildDeposit({
-                ...h.bundleCommon(),
-                publicIn: DEPOSIT_AMT,
+            buildDirectDeposit(h, {
+                amount: DEPOSIT_AMT,
                 recipient: alice.recipient,
-                output0: {
-                    rho: aliceRng(),
-                    rcm: aliceRng(),
-                    rcv: aliceRng(),
-                    rcvDep: aliceRng(),
-                    aux: rngForOutput(auxRng),
-                },
+                rngs: { rng: aliceRng, auxRng },
                 // Pays the relayer: this test asserts a flush happens, and a
                 // fee note addressed elsewhere is skipped indefinitely.
-                fee: relayerFeeNote(h.J, feeValue, { rng: aliceRng, auxRng }),
+                fee: (r) => relayerFeeNote(h.J, feeValue, r),
             }),
         );
         // A per-test `NonceManager` gives the N parallel sends distinct nonces
@@ -127,16 +126,7 @@ describe("batch flush", () => {
         // retry, which would reorder the batch; see `tx.ts`.
         const noncedPayer = new ethers.NonceManager(h.payer);
         const results = await Promise.all(
-            builts.map((built) =>
-                submitDepositDirect({
-                    payer: noncedPayer,
-                    deposit: built.deposit,
-                    aux: built.aux,
-                    feeAux: built.feeAux,
-                    tokenAddr: env.token2,
-                    maxTotal: depositTotal(DEPOSIT_AMT, feeValue),
-                }),
-            ),
+            builts.map((built) => submitDepositDirect(h, built, { payer: noncedPayer })),
         );
         const submitted = results.map((r, i) => ({
             depositId: r.depositId,
@@ -144,12 +134,8 @@ describe("batch flush", () => {
             feeCm: builts[i].deposit.feeCm,
         }));
 
-        const masp = new ethers.Contract(env.maspAddress, MASP_ABI, h.provider);
         const wantedIds = submitted.map((s) => s.depositId);
-        const flushTx = await waitForBatchFlushTx({
-            provider: h.provider,
-            masp,
-            maspAddress: env.maspAddress,
+        const { item } = await waitForBatchFlushTx(h, {
             fromBlock: startBlock,
             wantedIds,
         }).catch(async (e: Error) => {
@@ -160,22 +146,21 @@ describe("batch flush", () => {
             );
         });
 
-        const receipt = await h.provider.getTransactionReceipt(flushTx);
-        if (!receipt) throw new Error("flush receipt missing");
-
         const grouping = await flushGrouping(startBlock);
-        const flushed = parseContractLogs(receipt, masp, "DepositFlushed");
-        expect(flushed.length, `flushes seen: ${grouping}`).toBe(N);
-        const idsInTx = new Set(flushed.map((l) => (l.args[0] as bigint).toString()));
-        expect(idsInTx, `flushes seen: ${grouping}`)
+        expect(item.depositIds.length, `flushes seen: ${grouping}`).toBe(N);
+        expect(new Set(item.depositIds.map((id) => id.toString())), `flushes seen: ${grouping}`)
             .toEqual(new Set(wantedIds.map((id) => id.toString())));
+        expect(item.cms, "each deposit's own note, in flush order")
+            .toEqual(item.depositIds.map((id) => cmToHex(submitted.find((s) => s.depositId === id)!.cm)));
 
-        // Each deposit contributes two leaves, inserted as a single run.
-        const rootLogs = parseContractLogs(receipt, masp, "RootAdvanced");
-        expect(rootLogs.length, "one root advance per flush tx").toBe(1);
-        expect(rootLogs[0].args.inserted).toBe(BigInt(N * 2));
+        // Each deposit contributes two leaves, inserted as the flush's own
+        // single run: its `RootAdvanced`, not every root the transaction moved.
+        expect(item.inserted, "one root advance of 2N leaves for the flush")
+            .toBe(BigInt(N * LEAVES_PER_DEPOSIT));
 
-        for (const s of submitted) {
+        // In parallel: `BATCH_FLUSH` budgets one indexer wait and one fee-note
+        // wait, not N of each.
+        await Promise.all(submitted.map(async (s) => {
             await waitForCm(h.fmd, s.cm);
             // A flush is only worth doing if it pays: each deposit's second leaf
             // must be a note the relayer can open, which is what the
@@ -183,6 +168,6 @@ describe("batch flush", () => {
             await expectRelayerPaidOnCommitment(
                 s.feeCm, feeValue, ASSET, `deposit ${s.depositId} fee`,
             );
-        }
+        }));
     });
 });

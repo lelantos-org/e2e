@@ -2,7 +2,7 @@
 //
 // Three units are in play:
 //
-//   * circuit units — what a `Wallet` balance and a `CircuitAmount` hold
+//   * circuit units — what a wallet balance and a `CircuitAmount` hold
 //   * base units    — circuit units × the asset's scale; what an ERC-20
 //                     `balanceOf` returns and what Permit2 signs over
 //   * bps           — the pool's fee rate, applied in whichever unit the
@@ -43,6 +43,16 @@ export function withFee(amount: bigint, asset: bigint = ASSET): bigint {
  */
 export function circuitFee(amount: bigint): bigint {
     return (amount * FEE_BPS) / 10_000n;
+}
+
+/**
+ * What a withdrawal of `gross` pays out, in base units.
+ *
+ * A withdraw names its gross, the amount leaving the pool and published as
+ * `publicOut`; the recipient receives that less the pool's unshield fee.
+ */
+export function netOfGross(gross: bigint, asset: bigint = ASSET): bigint {
+    return baseAmt(gross, asset) - feeFor(gross, asset);
 }
 
 /**
