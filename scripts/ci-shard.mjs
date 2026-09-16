@@ -14,6 +14,9 @@
 // median, so it lands somewhere reasonable until the table is refreshed. Every
 // file under `tests/` is assigned to exactly one shard, whether or not it is
 // in the table.
+//
+// To refresh the table, run each file in its own process and record its wall
+// time less the ~20s stack boot; only the ratios matter, not the machine.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";

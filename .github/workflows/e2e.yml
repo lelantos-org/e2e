@@ -26,7 +26,6 @@ env:
   # image and commit: `<name>-sha-<short sha>`.
   BACKEND_REGISTRY: ghcr.io/lelantos-org/backend
   IMAGES_TAR: /tmp/backend-images.tar
-  SHARDS: 4
 
 jobs:
   # Produces the backend images once per `vendor/backend` commit and caches them
@@ -118,6 +117,8 @@ jobs:
           build() {
             local pkg="$1" df ctx args=()
             if [[ "$pkg" == relayer ]]; then
+              # Context `vendor/`, though the Dockerfile copies only `backend/`:
+              # circuits are mounted into the container at run time.
               df=vendor/backend/crates/relayer/Dockerfile; ctx=vendor
             else
               df=vendor/backend/Dockerfile; ctx=vendor/backend; args=(--build-arg "PACKAGE=$pkg")
@@ -126,8 +127,6 @@ jobs:
             docker buildx build --load "${args[@]}" -f "$df" -t "lelantos/$pkg:dev" \
               --cache-from "type=gha,scope=$pkg" --cache-to "type=gha,scope=$pkg,mode=max" "$ctx"
           }
-          # The relayer's context is `vendor/`, but its Dockerfile copies only
-          # `backend/`: circuits are mounted into the container at run time.
           pids=()
           for pkg in $MISSING; do build "$pkg" & pids+=($!); done
           fail=0
@@ -165,7 +164,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep in step with `env.SHARDS`.
+        # The only place the shard count is set: `ci-shard.mjs` is given
+        # `strategy.job-total`.
         shard: [1, 2, 3, 4]
 
     steps:
@@ -228,7 +228,7 @@ jobs:
           GH_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
         run: |
           set -euo pipefail
-          read -ra files <<< "$(node scripts/ci-shard.mjs ${{ matrix.shard }} "$SHARDS")"
+          read -ra files <<< "$(node scripts/ci-shard.mjs ${{ matrix.shard }} ${{ strategy.job-total }})"
           printf '%s\n' "${files[@]}"
           npx vitest run "${files[@]}"
 

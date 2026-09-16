@@ -19,6 +19,12 @@ check:
 test-file FILE *ARGS:
     cd "{{ROOT}}" && npx vitest run "{{FILE}}" {{ARGS}}
 
+# Same file selection and single-process run as the workflow's shards; boots one
+# stack. `scripts/ci-shard.mjs` packs files by `ci/test-timings.json`.
+[doc('Run the files CI shard INDEX of TOTAL gets, e.g. `just test-shard 2 4`')]
+test-shard INDEX TOTAL:
+    cd "{{ROOT}}" && read -ra files <<< "$(node scripts/ci-shard.mjs {{INDEX}} {{TOTAL}})" && npx vitest run "${files[@]}"
+
 # Tail the streamed per-service container logs from the last/current run.
 logs:
     tail -F "${E2E_LOG_DIR:-/tmp/e2e-logs}"/*.log
