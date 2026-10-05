@@ -12,7 +12,6 @@ import {
     expectRevert,
     type Harness,
     makeWallet,
-    newAuxRng,
     REVERT,
     unflushableFee,
     submitDepositDirect,
@@ -33,15 +32,14 @@ describe("negative: expired Permit2 deadline", () => {
     });
 
     it("deposit reverts when deadline < block.timestamp", async () => {
-        // Seeds far apart: `counter` seeds a few apart share most of their draws.
+        // Seed unique to this file: `counter` seeds a few apart share most of their draws.
         const rng = counter(0xe1_0001n);
-        const auxRng = newAuxRng(0xe1_a000_0001n);
         const alice = makeWallet(h.P, h.J, NSK);
         const built = buildDirectDeposit(h, {
             amount: DEPOSIT,
-            recipient: alice.recipient,
-            rngs: { rng, auxRng },
-            fee: (rngs) => unflushableFee(alice.recipient, rngs),
+            wallet: alice,
+            rng,
+            fee: (r) => unflushableFee(alice.recipient, r),
         });
         // Backdated from the chain's clock, not the host's: Permit2 compares
         // against `block.timestamp`, and anvil's time can run ahead of or behind

@@ -23,7 +23,7 @@ import { depositStep } from "../src/testkit/steps.js";
 // name via `depositAuthorized`, and unwraps whatever the pool did not pull.
 //
 // That indirection is the risk surface. `d.payer` must be the adapter, since
-// the pool pulls against its Permit2 allowance, while `d.recipient` and `outCm`
+// the pool pulls against its Permit2 allowance, while `d.recipient` and `inner`
 // still bind the note to the depositor. A wrong payer reverts
 // `AdapterNotPayer`; a wrong note binding escrows real coin to a commitment its
 // owner cannot spend, and nothing on-chain catches that. The last case below

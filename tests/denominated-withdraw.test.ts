@@ -166,17 +166,14 @@ describe("withdraw at a fixed denomination", () => {
             .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
 
         // The one deposit note covers the gross and the relayer's fee, leaving
-        // 1.5M less the fee across the five slots the fee note does not take.
-        // `decompose` fills all but the last slot greedily, largest rung first:
-        // 1M, then 200k twice, after which less than the ladder's 100k floor
-        // is left and goes into the held-back slot as the single residual.
-        // That walk holds for any fee under 100k; a larger one lands on other
-        // rungs, and is a relayer pricing change rather than a split bug.
-        expect(fee, "fee small enough for the split derived below").toBeLessThan(amt(100_000n));
-        const residual = amt(100_000n) - fee;
-        expect(change, `change was ${change.join(", ")}`).toEqual([
-            amt(1_000_000n), amt(200_000n), amt(200_000n), residual,
-        ]);
+        // 1.5M less the fee. The SDK caps change at two notes
+        // (`MAX_CHANGE_NOTES`): `decompose` puts the largest rung that fits,
+        // 1M, in the first and the rest in the held-back second as the single
+        // residual. That holds for any fee under 500k; a larger one lands on
+        // another rung, and is a relayer pricing change rather than a split bug.
+        expect(fee, "fee small enough for the split derived below").toBeLessThan(amt(500_000n));
+        const residual = amt(500_000n) - fee;
+        expect(change, `change was ${change.join(", ")}`).toEqual([amt(1_000_000n), residual]);
         expect(change.reduce((a, b) => a + b, 0n), "change is the whole remaining balance")
             .toBe(await shieldedBalance(alice, ASSET));
 

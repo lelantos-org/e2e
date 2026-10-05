@@ -8,7 +8,10 @@ import { ethers } from "ethers";
 import type { WalletApi } from "@lelantos-org/sdk";
 import { walletInternals } from "@lelantos-org/sdk/internal";
 import {
+    addressFromViewingKey,
     buildSpendingKey,
+    decodeAddress,
+    deriveOutgoingKey,
     type Field,
     type Jubjub,
     type Poseidon,
@@ -26,21 +29,19 @@ import { cmToHex, pollUntil } from "./utils.js";
 /** The raw key bundle the direct `buildDeposit` path takes. */
 export interface CircuitWallet {
     keys: SpendingKey;
+    /** The account's default address (diversifier index 0), the one an SDK wallet on `nsk` publishes. */
     recipient: OutputRecipient;
+    /** What `buildDeposit` seals a deposit from this account under. */
+    outgoingKey: Uint8Array;
 }
 
 export function makeWallet(P: Poseidon, J: Jubjub, nsk: Field): CircuitWallet {
-    const keys = buildSpendingKey(P, J, nsk);
+    const keys = buildSpendingKey(P, nsk);
     return {
         keys,
-        // An `OutputRecipient` carries the public clue key `ck`, never the root
-        // detection secret `dk`; expanding `ck` yields flag-key points only.
-        recipient: { pk_d: keys.pk_d, pk: keys.pk, ck: keys.ck },
+        recipient: decodeAddress(J, addressFromViewingKey(P, J, keys)),
+        outgoingKey: deriveOutgoingKey(nsk),
     };
-}
-
-export function rngForOutput(rng: () => Field): { esk: Field; fmdR: Field } {
-    return { esk: rng(), fmdR: rng() };
 }
 
 export interface Erc20Helpers {

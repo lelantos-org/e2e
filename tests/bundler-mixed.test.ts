@@ -58,7 +58,6 @@ import {
     BUNDLER_FACTORY_ABI,
     buildDirectDeposit,
     cancelDepositAfterDelay,
-    cmToHex,
     counter,
     createTestWallet,
     type Erc20Helpers,
@@ -75,7 +74,6 @@ import {
     MASP_ABI,
     MASP_TRANSFER_ABI,
     N_OUT,
-    newAuxRng,
     type QueuedOp,
     quoteDepositFee,
     RelayerHooks,
@@ -170,8 +168,6 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
     let mDai: Erc20Helpers;
     let hooks: RelayerHooks;
     const rng = counter(0xb1_de90_0001n);
-    const auxRng = newAuxRng(0xb1_add_0001n);
-    const rngs = { rng, auxRng };
 
     /** The bundle cap the relayer runs with. */
     const K = env.bundleMaxItems;
@@ -285,8 +281,8 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
         const builts = Array.from({ length: FLUSH_N }, () =>
             buildDirectDeposit(h, {
                 amount: FLUSHED,
-                recipient: sink.recipient,
-                rngs,
+                wallet: sink,
+                rng,
                 fee: (r) => relayerFeeNote(h.J, feeValue, r),
             }),
         );
@@ -378,10 +374,10 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
             const [flush] = items;
             expect(flush.depositIds.map(String)).toEqual(queued[0].depositIds.map(String));
             expect(flush.inserted).toBe(BigInt(LEAVES_PER_DEPOSIT * flush.depositIds.length));
-            expect(flush.cms, "each deposit's own note").toEqual(
+            expect(flush.inners, "each deposit's own note").toEqual(
                 flush.depositIds.map((id) => {
                     const k = m.deposits.findIndex((d) => d.depositId === id);
-                    return cmToHex(m.builts[k].cm);
+                    return m.builts[k].deposit.inner.toLowerCase();
                 }),
             );
             const count = async (blockTag: number) =>
@@ -551,8 +547,8 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
         const feeValue = await quoteDepositFee(h.relayer, env.chainId, ASSET);
         const built = buildDirectDeposit(h, {
             amount: FLUSHED,
-            recipient: sink.recipient,
-            rngs,
+            wallet: sink,
+            rng,
             fee: (r) => relayerFeeNote(h.J, feeValue, r),
         });
         const startBlock = await h.provider.getBlockNumber();
@@ -795,7 +791,6 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
     async function transferCalldata(p: CapturedPayload): Promise<string> {
         const pool = new ethers.Contract(env.maspAddress, [...MASP_TRANSFER_ABI, ...MASP_ABI], h.provider);
         const b32 = (v: bigint) => ethers.toBeHex(v, 32);
-        const pt = (v: readonly [bigint, bigint]) => [v[0], v[1]];
         const pi = p.pubInputs;
         // `anchorIndex` is a lookup hint, not a public input: the ring slot the
         // pool compares `pi.merkleRoot` against. The anchor is already on chain.
@@ -817,11 +812,8 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
                 nullifier: pi.nullifier.map(b32),
                 outCm: pi.outCm.map(b32),
                 publicAssetId: pi.publicAssetId,
-                publicIn: pi.publicIn,
                 publicOut: pi.publicOut,
-                inCv: pi.inCv.map(pt),
-                outCv: pi.outCv.map(pt),
-                outCvDep: pi.outCvDep.map(pt),
+                digest: pi.digest,
                 recipient: pi.recipient,
                 chainId: pi.chainId,
                 payer: pi.payer,
@@ -833,10 +825,13 @@ describe("bundler: mixed bundles through the relayer's Bundler", () => {
                 newRoot: ethers.ZeroHash,
                 startIndex: await pool.committedCount(),
                 anchorIndex,
+                digest: 0,
             },
             p.aux.map((a) => ({
                 clueRx: a.clueR[0],
                 clueRy: a.clueR[1],
+                clueQx: a.clueQ[0],
+                clueQy: a.clueQ[1],
                 ephPubX: a.ephPub[0],
                 ephPubY: a.ephPub[1],
                 ciphertext: ethers.hexlify(a.ciphertext),

@@ -51,7 +51,6 @@ import {
     isEscrowed,
     makeWallet,
     mineIfAnvil,
-    newAuxRng,
     quoteDepositFee,
     relayerFeeWallet,
     scaleFor,
@@ -388,7 +387,6 @@ describe("deposit paying the relayer in another asset", () => {
         expect(await quoteDepositFee(h.relayer, env.chainId, FEE_ASSET)).toBeGreaterThan(0n);
 
         const rng = counter(0xfa_ca9_0001n);
-        const auxRng = newAuxRng(0xfa_add_0001n);
         const principal = withFee(DEPOSIT, DEPOSIT_ASSET);
         const fee = UNFLUSHED_FEE * scaleFor(FEE_ASSET);
 
@@ -400,9 +398,9 @@ describe("deposit paying the relayer in another asset", () => {
             const built = buildDirectDeposit(h, {
                 amount: DEPOSIT,
                 asset: DEPOSIT_ASSET,
-                recipient: aliceKeys.recipient,
-                rngs: { rng, auxRng },
-                fee: (rngs) => unflushableFee(aliceKeys.recipient, rngs, {
+                wallet: aliceKeys,
+                rng,
+                fee: (r) => unflushableFee(aliceKeys.recipient, r, {
                     value: UNFLUSHED_FEE,
                     asset: FEE_ASSET,
                 }),

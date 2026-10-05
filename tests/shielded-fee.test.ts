@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildSpendingKey, encodeAddress, Jubjub, Poseidon } from "@lelantos-org/sdk/primitives";
+import { addressFromViewingKey, buildSpendingKey, Jubjub, Poseidon } from "@lelantos-org/sdk/primitives";
 
 import {
     RELAYER_FEE_ADDRESS,
@@ -20,9 +20,9 @@ import {
 describe("relayer shielded fee identity", () => {
     it("the committed address and viewing key are the ones the nsk derives", async () => {
         const [P, J] = await Promise.all([Poseidon.build(), Jubjub.build()]);
-        const keys = buildSpendingKey(P, J, RELAYER_FEE_NSK);
+        const keys = buildSpendingKey(P, RELAYER_FEE_NSK);
 
-        expect(encodeAddress(J, keys.pk_d, keys.pk, keys.ck)).toBe(RELAYER_FEE_ADDRESS);
+        expect(addressFromViewingKey(P, J, keys)).toBe(RELAYER_FEE_ADDRESS);
         expect(`0x${keys.ivk.toString(16).padStart(64, "0")}`).toBe(RELAYER_FEE_IVK);
     });
 });

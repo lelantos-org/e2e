@@ -30,12 +30,13 @@ export const RELAYER_FEE_NSK = 0xfee_1_a1_e40n;
  * bech32m address wallets send the fee note to, and the decrypt-only viewing
  * key the relayer is configured with.
  *
- * Regenerate with `buildSpendingKey(P, J, RELAYER_FEE_NSK)` and
- * `encodeAddress(J, pk_d, pk, ck)`. `tests/shielded-fee.test.ts` re-derives
- * both and fails if either drifts from the nsk above.
+ * Regenerate with `buildSpendingKey(P, RELAYER_FEE_NSK)` and
+ * `addressFromViewingKey(P, J, keys)`: the address at diversifier index 0, the
+ * only one the relayer credits. `tests/shielded-fee.test.ts` re-derives both
+ * and fails if either drifts from the nsk above.
  */
 export const RELAYER_FEE_ADDRESS =
-    "lelantos1pt5x36h9te4nhc5k5dx7he4m55p9l6gl6u8t3wxkhxvx4d89c6q2qpxmsqj0ha34jkaupskyemvmpwempecmjjpcd0kswwe62phz2qcj7kh0q02j4akatg9xchazr4td8eht8ul4lzdr6k346fzsaxtf3ccnr3c9";
+    "lelantos12nks6y88842ua99jy56n6ng02sdktcqmzzwhgpd0uuvmyzp8yzxhuc2zazlcm8kyy32hsz500rkznrrtdk4xj26kz2gg9axktesvsfhjx0h365rtj9h36wgw5xknf7swcglwq4uqw9aflmcq88rfssrflgynn8ccuyutmz886889at5hzykqsexr5w";
 
 export const RELAYER_FEE_IVK =
     "0x2a60ff35984e4c2013a03867a433d5d5272df218436cc27557fddc5231fcd99d";

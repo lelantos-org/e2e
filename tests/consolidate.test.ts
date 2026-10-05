@@ -56,7 +56,6 @@ import {
     isWalletError,
     makeWallet,
     mineIfAnvil,
-    newAuxRng,
     N_IN,
     N_OUT,
     quoteDepositFee,
@@ -113,10 +112,9 @@ describe("spending a balance spread over more notes than the circuit's inputs", 
     let bob: SdkWallet;
     /** The raw key bundle behind `alice`, for the direct deposit path. */
     let aliceKeys: CircuitWallet;
-    // Seeds unique to this file and far apart: every file draws clues and
-    // ephemerals onto one shared anvil and one shared FMD index.
+    // Seed unique to this file: every file mints onto one shared anvil and one
+    // shared FMD index.
     const rng = counter(0x53_a1ce_0001n);
-    const auxRng = newAuxRng(0x53_add_0001n);
 
     beforeAll(async () => {
         const f = await setupFile({
@@ -155,8 +153,8 @@ describe("spending a balance spread over more notes than the circuit's inputs", 
         const builts = Array.from({ length: NOTES }, () =>
             buildDirectDeposit(h, {
                 amount: NOTE,
-                recipient: aliceKeys.recipient,
-                rngs: { rng, auxRng },
+                wallet: aliceKeys,
+                rng,
                 // Pays this relayer, so the deposits actually flush; a note
                 // addressed elsewhere is skipped for ever.
                 fee: (r) => relayerFeeNote(h.J, feeValue, r),

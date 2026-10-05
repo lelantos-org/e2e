@@ -22,11 +22,12 @@ import {
     evmAddress,
     hex32,
 } from "@lelantos-org/sdk";
+import { commitWithInner, Poseidon } from "@lelantos-org/sdk/primitives";
 
 import { MASP_ABI, MASP_DEPOSIT_ABI } from "../protocol/abi.js";
 import { parseContractLogs } from "../protocol/logs.js";
 import { env } from "../env.js";
-import { log } from "../utils.js";
+import { cmToHex, log } from "../utils.js";
 
 /** What a cancel needs from the stack: a reader, and the payer that signs. */
 export interface CancelCtx {
@@ -65,27 +66,28 @@ export async function escrowOf(provider: ethers.JsonRpcProvider, txHash: string)
         throw new Error(`escrowOf: expected one DepositEscrowed log in ${txHash}, got ${escrowed.length}`);
     }
     const d = escrowed[0].args;
-    const cm = hex32(d.cm as string);
+    const inner = hex32(d.inner as string);
     const publicAssetId = assetId(d.publicAssetId as bigint);
+    // The event carries `inner`; the leaf is built from it and the public amount.
+    const cm = commitWithInner(await Poseidon.build(), publicAssetId, d.publicIn as bigint, BigInt(inner));
     // `submittedAt` in the digest is the block the deposit landed in.
     const submittedAt = receipt.blockNumber;
     return {
         depositId: d.id as bigint,
         native: false,
         asset: publicAssetId,
-        commitment: cm,
+        commitment: hex32(cmToHex(cm)),
         cancelInputs: {
             publicIn: d.publicIn as bigint,
-            cm,
-            cvDep: [d.cvDepX as bigint, d.cvDepY as bigint],
+            inner,
             publicAssetId,
             feeBpsAtSubmit: Number(d.feeBpsAtSubmit),
             payer: evmAddress(d.payer as string),
             submittedAt,
             feeIn: d.feeIn as bigint,
             feeAssetId: assetId(d.feeAssetId as bigint),
-            feeCm: hex32(d.feeCm as string),
-            feeCvDep: [d.feeCvDepX as bigint, d.feeCvDepY as bigint],
+            feeInner: hex32(d.feeInner as string),
+            pulled: d.pulled as bigint,
         },
         cancellableAtBlock: submittedAt + (await cancelDelay(provider)),
     };
@@ -113,13 +115,13 @@ export async function cancelDepositAfterDelay(ctx: CancelCtx, txHash: string): P
     const tx = await masp.cancelDeposit(
         escrow.depositId,
         i.publicIn,
-        i.cm,
-        i.cvDep,
+        i.inner,
         i.publicAssetId,
         i.feeBpsAtSubmit,
         i.payer,
         i.submittedAt,
-        [i.feeIn, i.feeAssetId, i.feeCm, i.feeCvDep],
+        [i.feeIn, i.feeAssetId, i.feeInner],
+        i.pulled,
     );
     const canceled = parseContractLogs(await tx.wait(), masp, "DepositCanceled");
     if (canceled.length !== 1) {

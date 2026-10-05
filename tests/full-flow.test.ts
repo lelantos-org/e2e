@@ -25,7 +25,6 @@ import {
     N_IN,
     N_OUT,
     netOfGross,
-    newAuxRng,
     REVERT,
     snapshotBalances,
     unflushableFee,
@@ -170,7 +169,7 @@ describe("masp e2e flow", () => {
         expect(item.inserted, "leaves added by the flush").toBe(
             BigInt(LEAVES_PER_DEPOSIT * item.depositIds.length),
         );
-        expect(item.cms, "the flush emitted alice's note").toContain(r.commitments[0].toLowerCase());
+        expect(item.inners, "the flush emitted alice's note").toContain(r.escrow.cancelInputs.inner.toLowerCase());
         expectLeafInItem(alice, r.commitments[0], item);
     }, TEST_TIMEOUT.DEPOSIT);
 
@@ -219,14 +218,13 @@ describe("masp e2e flow", () => {
         // + fee while the payer signed for the principal alone, so Permit2
         // rejects the transfer as exceeding the permitted amount.
         const aliceRng = counter(0xff_a1ce_0099n);
-        const auxRng = newAuxRng(0xff_add_0099n);
         const aliceKeys = makeWallet(h.P, h.J, ALICE_NSK);
         const built = buildDirectDeposit(h, {
             amount: UNDERSIZED_PERMIT_AMT,
-            recipient: aliceKeys.recipient,
-            rngs: { rng: aliceRng, auxRng },
+            wallet: aliceKeys,
+            rng: aliceRng,
             // Never flushed, and never escrowed either: the submit reverts.
-            fee: (rngs) => unflushableFee(aliceKeys.recipient, rngs),
+            fee: (rng) => unflushableFee(aliceKeys.recipient, rng),
         });
         await expectRevert(
             submitDepositDirect(h, built, {

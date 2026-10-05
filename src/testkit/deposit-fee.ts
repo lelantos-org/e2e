@@ -18,22 +18,47 @@
 // `unflushableFee` is only for tests that assert a revert at submit time and
 // never reach a flush.
 
-import { decodeAddress, type Field, type Jubjub } from "@lelantos-org/sdk/primitives";
-import type { buildDeposit } from "@lelantos-org/sdk/protocol";
+import {
+    commitWithInner,
+    decodeAddress,
+    type Field,
+    hexToBytes,
+    type Jubjub,
+    type Poseidon,
+} from "@lelantos-org/sdk/primitives";
+import type { buildDeposit, DepositRequest } from "@lelantos-org/sdk/protocol";
 import type { RelayerClient } from "@lelantos-org/sdk/services";
 
 import { RELAYER_FEE_ADDRESS } from "../protocol/shielded-fee.js";
-import { rngForOutput } from "../scenario.js";
+import { cmToHex } from "../utils.js";
 
 /** What `buildDeposit` wants under `fee`. */
 export type DepositFeeArg = Parameters<typeof buildDeposit>[0]["fee"];
 
 type Recipient = DepositFeeArg["recipient"];
 
-/** The two randomness sources `buildDeposit` draws from, in draw order. */
-export interface FeeRng {
-    rng: () => Field;
-    auxRng: () => Field;
+/**
+ * The source of a deposit's `rho` nonces, one draw per leaf.
+ *
+ * No default seed: two files drawing from one would mint identical notes on
+ * the shared anvil.
+ */
+export type NonceRng = () => Field;
+
+/** The next draw as the 32 bytes `buildDeposit` takes for a leaf's `rhoNonce`. */
+export function rhoNonce(rng: NonceRng): Uint8Array {
+    return hexToBytes(cmToHex(rng()));
+}
+
+/**
+ * The fee note's tree leaf. A deposit publishes only `feeInner`; the batch
+ * circuit builds the leaf from it and the escrowed amount, and so does this.
+ */
+export function feeLeaf(
+    P: Poseidon,
+    d: Pick<DepositRequest, "feeAssetId" | "feeIn" | "feeInner">,
+): Field {
+    return commitWithInner(P, d.feeAssetId, d.feeIn, BigInt(d.feeInner));
 }
 
 /**
@@ -74,10 +99,10 @@ export async function quoteDepositFee(
 export function relayerFeeNote(
     J: Jubjub,
     value: bigint,
-    rngs: FeeRng,
+    rng: NonceRng,
     asset?: bigint,
 ): DepositFeeArg {
-    return feeNote(decodeAddress(J, RELAYER_FEE_ADDRESS), value, rngs, asset);
+    return feeNote(decodeAddress(J, RELAYER_FEE_ADDRESS), value, rng, asset);
 }
 
 /**
@@ -89,7 +114,7 @@ export function relayerFeeNote(
  */
 export function unflushableFee(
     recipient: Recipient,
-    rngs: FeeRng,
+    rng: NonceRng,
     /**
      * A valued note in another asset instead of the zero-value self-pad: still
      * addressed away from the relayer, so still never flushed, but escrowed on
@@ -97,30 +122,19 @@ export function unflushableFee(
      */
     paid?: { value: bigint; asset: bigint },
 ): DepositFeeArg {
-    return feeNote(recipient, paid?.value ?? 0n, rngs, paid?.asset);
-}
-
-/**
- * The per-note randomness `buildDeposit` takes for either leaf, drawn in a
- * fixed order.
- *
- * Both leaves draw from the same counters, so a test's draws stay sequential
- * and reproducible: interleaving a second source makes reruns diverge.
- */
-export function noteRandomness({ rng, auxRng }: FeeRng): Parameters<typeof buildDeposit>[0]["output0"] {
-    return { rho: rng(), rcm: rng(), rcv: rng(), rcvDep: rng(), aux: rngForOutput(auxRng) };
+    return feeNote(recipient, paid?.value ?? 0n, rng, paid?.asset);
 }
 
 function feeNote(
     recipient: Recipient,
     value: bigint,
-    rngs: FeeRng,
+    rng: NonceRng,
     asset?: bigint,
 ): DepositFeeArg {
     return {
         recipient,
         value,
         ...(asset !== undefined ? { asset } : {}),
-        ...noteRandomness(rngs),
+        rhoNonce: rhoNonce(rng),
     };
 }

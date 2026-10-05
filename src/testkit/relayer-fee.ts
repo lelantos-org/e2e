@@ -35,9 +35,12 @@ import type {
     WithdrawResult,
 } from "@lelantos-org/sdk";
 
+import { Poseidon } from "@lelantos-org/sdk/primitives";
+
 import { RELAYER_FEE_NSK } from "../protocol/shielded-fee.js";
-import { pollUntil } from "../utils.js";
+import { cmToHex, pollUntil } from "../utils.js";
 import { createTestWallet, onWalletsDisposed } from "../wallet.js";
+import { feeLeaf } from "./deposit-fee.js";
 import { feePaid } from "./spend-fee.js";
 import { POLL, SYNC_LIMIT, TIMEOUT } from "./timeouts.js";
 
@@ -142,12 +145,15 @@ export async function expectRelayerPaid(
  * only the depositor's leaf, since counting the fee leaf would inflate the
  * wallet's balance with value it cannot spend. `escrow.cancelInputs` is the
  * `DepositEscrowed` payload, so it is what the payer was actually debited for.
+ * It names the fee note by its `inner`; the leaf is rebuilt from that and the
+ * escrowed amount, as the batch circuit does.
  *
  * The leaf reaches the tree at flush, not at submit, so call this after the
  * `awaitOwn` that already waits on that flush.
  */
 export async function expectRelayerPaidOnDeposit(r: DepositResult, asset: AssetId): Promise<bigint> {
-    const { feeIn, feeAssetId, feeCm } = r.escrow.cancelInputs;
+    const { feeIn, feeAssetId } = r.escrow.cancelInputs;
+    const feeCm = cmToHex(feeLeaf(await Poseidon.build(), r.escrow.cancelInputs));
     const label = `relayer fee note (deposit ${r.txHash})`;
     // The escrow names the fee asset the pool pulled and the flush binds the
     // leaf to, so a mismatch here is caught before the note is looked for.
@@ -160,8 +166,8 @@ export async function expectRelayerPaidOnDeposit(r: DepositResult, asset: AssetI
  * it.
  *
  * For the direct `buildDeposit` path, which produces no SDK result and holds
- * `deposit.feeCm` itself. `charged` is passed rather than derived because there
- * is no result or event the caller has not already read.
+ * the built deposit's `feeCm` itself. `charged` is passed rather than derived
+ * because there is no result or event the caller has not already read.
  */
 export async function expectRelayerPaidOnCommitment(
     feeCm: string | readonly string[],

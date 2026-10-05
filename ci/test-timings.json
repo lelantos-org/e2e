@@ -11,6 +11,7 @@
     "tests/edge/concurrent-spends.test.ts": 20,
     "tests/edge/submit-retry.test.ts": 57,
     "tests/full-flow.test.ts": 10,
+    "tests/memo-and-addresses.test.ts": 27,
     "tests/multi-asset.test.ts": 25,
     "tests/negative/deposit-fee-too-low.test.ts": 76,
     "tests/negative/expired-permit.test.ts": 1,

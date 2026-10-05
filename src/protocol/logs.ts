@@ -50,12 +50,14 @@ export interface BundleItem {
     depositIds: bigint[];
     /** A spend's four nullifiers, lowercase hex; empty for a flush. */
     nullifiers: string[];
-    /**
-     * Lowercase hex, in emission order: a spend's six output commitments, or a
-     * flush's depositor notes. `DepositFlushed` carries only the depositor's
-     * leaf, so a flush has half as many as it inserted.
-     */
+    /** A spend's six output commitments, lowercase hex, in emission order; empty for a flush. */
     cms: string[];
+    /**
+     * A flush's depositor notes, each as the `inner` its deposit escrowed,
+     * lowercase hex, in emission order. `DepositFlushed` carries neither leaf,
+     * and nothing for the fee note, so a flush has half as many as it inserted.
+     */
+    inners: string[];
     /** The pool's `AssetMoved` for a withdraw leg: withdraw, withdrawNative, swap. */
     assetMoved?: ethers.Result;
     /** `NativeAdapter.NativeWithdrawn`, on a withdrawNative. */
@@ -107,7 +109,7 @@ export function bundleItems(receipt: ethers.TransactionReceipt, at: BundleEmitte
 
     const items: BundleItem[] = [];
     // Logs seen since the last item closed that open the next one.
-    let flushed: { id: bigint; cm: string }[] = [];
+    let flushed: { id: bigint; inner: string }[] = [];
     let nullifiers: string[] = [];
     let firstLog: number | undefined;
     let current: BundleItem | undefined;
@@ -121,7 +123,7 @@ export function bundleItems(receipt: ethers.TransactionReceipt, at: BundleEmitte
         switch (fromMasp ? parsed.name : `adapter:${parsed.name}`) {
             case "DepositFlushed":
                 firstLog ??= log.index;
-                flushed.push({ id: parsed.args.id as bigint, cm: hex32(parsed.args.cm) });
+                flushed.push({ id: parsed.args.id as bigint, inner: hex32(parsed.args.inner) });
                 break;
             case "NullifierConsumed":
                 firstLog ??= log.index;
@@ -146,7 +148,8 @@ export function bundleItems(receipt: ethers.TransactionReceipt, at: BundleEmitte
                     newRoot: hex32(parsed.args.newRoot),
                     depositIds: flushed.map((f) => f.id),
                     nullifiers,
-                    cms: flushed.map((f) => f.cm),
+                    cms: [],
+                    inners: flushed.map((f) => f.inner),
                     logRange: [firstLog!, log.index],
                 };
                 items.push(current);

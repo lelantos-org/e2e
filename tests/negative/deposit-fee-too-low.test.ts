@@ -63,7 +63,6 @@ import {
     isEscrowed,
     makeWallet,
     mineIfAnvil,
-    newAuxRng,
     quoteDepositFee,
     relayerFeeNote,
     submitDepositDirect,
@@ -99,7 +98,6 @@ describe("negative: deposit whose fee note does not pay the relayer", () => {
     let payerWallet: SdkWallet;
     let janitor: EscrowJanitor | undefined;
     const rng = counter(0xe3_a1ce_0001n);
-    const auxRng = newAuxRng(0xe3_add_0001n);
 
     beforeAll(async () => {
         // No `nsks`: the SDK wallet prices its fee note off
@@ -132,11 +130,11 @@ describe("negative: deposit whose fee note does not pay the relayer", () => {
         const feeValue = typeof fee === "bigint" ? fee : 0n;
         const built = buildDirectDeposit(h, {
             amount: DEPOSIT,
-            recipient: alice.recipient,
-            rngs: { rng, auxRng },
-            fee: (rngs) => fee === "addressed elsewhere"
-                ? unflushableFee(alice.recipient, rngs)
-                : relayerFeeNote(h.J, feeValue, rngs),
+            wallet: alice,
+            rng,
+            fee: (r) => fee === "addressed elsewhere"
+                ? unflushableFee(alice.recipient, r)
+                : relayerFeeNote(h.J, feeValue, r),
         });
         // Permit2 signs over what the pool will actually pull (the default
         // `maxTotal`), so an underpaying deposit permits less rather than

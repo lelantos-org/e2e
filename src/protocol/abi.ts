@@ -18,7 +18,7 @@ export const MASP_ABI = [
     "function escrowed(uint256 id) view returns (bytes32)",
     // Blocks a deposit must age before `cancelDeposit` accepts it.
     "function cancelDelay() view returns (uint32)",
-    "event DepositFlushed(uint256 indexed id, bytes32 cm)",
+    "event DepositFlushed(uint256 indexed id, bytes32 inner)",
     "event RootAdvanced(uint64 indexed startIndex, uint64 inserted, bytes32 oldRoot, bytes32 newRoot)",
 ] as const;
 
@@ -33,11 +33,11 @@ export const BUNDLE_ITEM_EVENTS_ABI = [
     ...MASP_ABI.filter((f) => f.startsWith("event ")),
     // `NullifierSet`, which the pool inherits.
     "event NullifierConsumed(bytes32 indexed nf)",
-    "event NotePayload(bytes32 indexed cm, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint256 cvDepX, uint256 cvDepY)",
+    "event NotePayload(bytes32 indexed cm, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)",
     "event AssetMoved(uint64 indexed assetId, address indexed token, uint256 inAmount, uint256 outAmount, uint64 publicIn, uint64 publicOut)",
     // Only its id is read: a swap's output deposit is escrowed in the swap's
     // own operation and flushed by a later one.
-    "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm, uint256 cvDepX, uint256 cvDepY, uint256 rcv, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint64 feeAssetId, uint64 feeIn, bytes32 feeCm, uint256 feeCvDepX, uint256 feeCvDepY, uint256 feeRcv, uint256 feeClueRx, uint256 feeClueRy, uint256 feeEphPubX, uint256 feeEphPubY, bytes feeCiphertext)",
+    "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 inner, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint64 feeAssetId, uint64 feeIn, bytes32 feeInner, uint256 feeClueRx, uint256 feeClueRy, uint256 feeEphPubX, uint256 feeEphPubY, bytes feeCiphertext, uint256 pulled)",
     // `NativeAdapter`, after the pool's withdraw it wraps.
     "event NativeWithdrawn(address indexed recipient, uint256 amount)",
     // `SwapWrapper`, after both of its pool calls: one or the other.
@@ -79,11 +79,12 @@ export const BUNDLER_FACTORY_ABI = [
  *
  * The tuple layouts are `MASP.Proof`, `PubInputs.Transact`,
  * `PubInputs.SpendTree` and `AuxValidation.Output`, in declaration order. A
- * spend carries only the tree update's new root, its start index and the ring
- * slot of `pi.merkleRoot`; the pool rebuilds the rest of the proof image.
+ * spend carries only the tree update's new root, its start index, the ring slot
+ * of `pi.merkleRoot` and the batch circuit's digest; the pool rebuilds the rest
+ * of the proof image.
  */
 export const MASP_TRANSFER_ABI = [
-    "function transfer((uint256[2] a, uint256[2][2] b, uint256[2] c) p, (bytes32 merkleRoot, bytes32[4] nullifier, bytes32[6] outCm, uint64 publicAssetId, uint64 publicIn, uint64 publicOut, uint256[2][4] inCv, uint256[2][6] outCv, uint256[2][6] outCvDep, address recipient, uint256 chainId, address payer, address relayer, uint256 intentHash) pi, (uint256[2] a, uint256[2][2] b, uint256[2] c) tp, (bytes32 newRoot, uint64 startIndex, uint8 anchorIndex) tpi, (uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[6] aux)",
+    "function transfer((uint256[2] a, uint256[2][2] b, uint256[2] c) p, (bytes32 merkleRoot, bytes32[4] nullifier, bytes32[6] outCm, uint64 publicAssetId, uint64 publicOut, uint256 digest, address recipient, uint256 chainId, address payer, address relayer, uint256 intentHash) pi, (uint256[2] a, uint256[2][2] b, uint256[2] c) tp, (bytes32 newRoot, uint64 startIndex, uint8 anchorIndex, uint256 digest) tpi, (uint256 clueRx, uint256 clueRy, uint256 clueQx, uint256 clueQy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext)[6] aux)",
 ] as const;
 
 export const MOCK_ERC20_ABI = [
@@ -102,24 +103,24 @@ export const MOCK_WETH9_ABI = [
  * Raw deposit entry point, kept separate from `MASP_ABI` because
  * `submitDepositDirect` bypasses the SDK wallet and needs the tuple layout.
  *
- * A deposit occupies two leaves: the depositor's note (`outCm`, anchored by
- * `(cvDep, rcv)`) and a note paying whoever flushes the batch (`feeCm`,
- * anchored by `(feeCvDep, feeRcv)`). Both are part of the escrow digest
- * preimage except for the blinders, so `deposit` takes one aux payload per
- * leaf.
+ * A deposit occupies two leaves: the depositor's note and a note paying whoever
+ * flushes the batch. The request names each by its `inner`; the leaf is
+ * `Poseidon(TAG_CM, asset * 2^64 + value, inner)`, built by the batch circuit.
+ * Both are part of the escrow digest preimage, so `deposit` takes one aux
+ * payload per leaf.
  */
 export const MASP_DEPOSIT_ABI = [
-    "function deposit((uint256 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32 outCm,uint256[2] cvDep,uint256 rcv,uint64 feeAssetId,uint64 feeIn,bytes32 feeCm,uint256[2] feeCvDep,uint256 feeRcv) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,uint256 maxFee,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) aux, (uint256 clueRx,uint256 clueRy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) feeAux) returns (uint256)",
+    "function deposit((uint256 chainId,uint64 publicAssetId,uint64 publicIn,address payer,address recipient,bytes32 inner,uint64 feeAssetId,uint64 feeIn,bytes32 feeInner) d, (uint256 nonce,uint256 deadline,uint256 maxTotal,uint256 maxFee,bytes signature) sig, (uint256 clueRx,uint256 clueRy,uint256 clueQx,uint256 clueQy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) aux, (uint256 clueRx,uint256 clueRy,uint256 clueQx,uint256 clueQy,uint256 ephPubX,uint256 ephPubY,bytes ciphertext) feeAux) returns (uint256)",
     "error SignatureExpired(uint256 signatureDeadline)",
-    "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 cm, uint256 cvDepX, uint256 cvDepY, uint256 rcv, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint64 feeAssetId, uint64 feeIn, bytes32 feeCm, uint256 feeCvDepX, uint256 feeCvDepY, uint256 feeRcv, uint256 feeClueRx, uint256 feeClueRy, uint256 feeEphPubX, uint256 feeEphPubY, bytes feeCiphertext)",
-    "event DepositFlushed(uint256 indexed id, bytes32 cm)",
+    "event DepositEscrowed(uint256 indexed id, address indexed payer, address indexed recipient, uint64 publicAssetId, uint64 publicIn, uint16 feeBpsAtSubmit, bytes32 inner, uint256 clueRx, uint256 clueRy, uint256 ephPubX, uint256 ephPubY, bytes ciphertext, uint64 feeAssetId, uint64 feeIn, bytes32 feeInner, uint256 feeClueRx, uint256 feeClueRy, uint256 feeEphPubX, uint256 feeEphPubY, bytes feeCiphertext, uint256 pulled)",
+    "event DepositFlushed(uint256 indexed id, bytes32 inner)",
     // The payer's way out of a deposit no relayer will flush. Every argument is
     // the digest preimage the pool dropped from storage at submit, so a caller
     // resupplies it from the deposit's own `DepositEscrowed` event.
     // A relayer note paid in another asset is refunded in that asset, so a
     // cancel reports two amounts: `refunded` in the deposit's token and
     // `feeRefunded` in `feeAssetId`'s, nonzero only on the two-token path.
-    "function cancelDeposit(uint256 id, uint48 publicIn, bytes32 cm, uint256[2] cvDep, uint64 publicAssetId, uint16 fbps, address payer, uint32 submittedAt, (uint48 feeIn, uint64 feeAssetId, bytes32 feeCm, uint256[2] feeCvDep) feeNote) returns (uint256 total, uint256 feeRefunded)",
+    "function cancelDeposit(uint256 id, uint48 publicIn, bytes32 inner, uint64 publicAssetId, uint16 fbps, address payer, uint32 submittedAt, (uint48 feeIn, uint64 feeAssetId, bytes32 feeInner) feeNote, uint256 pulled) returns (uint256 total, uint256 feeRefunded)",
     "event DepositCanceled(uint256 indexed id, address indexed payer, uint256 refunded, uint64 feeAssetId, uint256 feeRefunded)",
     "error FeeAssetMustBeZero()",
     "error FeeAssetUnsupported(uint64 id)",

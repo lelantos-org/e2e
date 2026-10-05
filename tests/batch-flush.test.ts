@@ -21,14 +21,12 @@ import {
     amt,
     ASSET,
     buildDirectDeposit,
-    cmToHex,
     counter,
     expectRelayerPaidOnCommitment,
     FEE_HEADROOM,
     type Harness,
     LEAVES_PER_DEPOSIT,
     makeWallet,
-    newAuxRng,
     txBundleItems,
     quoteDepositFee,
     relayerFeeNote,
@@ -54,7 +52,6 @@ describe("batch flush", () => {
     let h: Harness;
     let alice: CircuitWallet;
     const aliceRng = counter(0xbf_a1ce_0001n);
-    const auxRng = newAuxRng(0xbf_add_0001n);
 
     beforeAll(async () => {
         // No `nsks`: this file drives the circuit builders directly rather
@@ -114,8 +111,8 @@ describe("batch flush", () => {
         const builts = Array.from({ length: N }, () =>
             buildDirectDeposit(h, {
                 amount: DEPOSIT_AMT,
-                recipient: alice.recipient,
-                rngs: { rng: aliceRng, auxRng },
+                wallet: alice,
+                rng: aliceRng,
                 // Pays the relayer: this test asserts a flush happens, and a
                 // fee note addressed elsewhere is skipped indefinitely.
                 fee: (r) => relayerFeeNote(h.J, feeValue, r),
@@ -131,7 +128,8 @@ describe("batch flush", () => {
         const submitted = results.map((r, i) => ({
             depositId: r.depositId,
             cm: builts[i].cm,
-            feeCm: builts[i].deposit.feeCm,
+            inner: builts[i].deposit.inner,
+            feeCm: builts[i].feeCm,
         }));
 
         const wantedIds = submitted.map((s) => s.depositId);
@@ -150,8 +148,8 @@ describe("batch flush", () => {
         expect(item.depositIds.length, `flushes seen: ${grouping}`).toBe(N);
         expect(new Set(item.depositIds.map((id) => id.toString())), `flushes seen: ${grouping}`)
             .toEqual(new Set(wantedIds.map((id) => id.toString())));
-        expect(item.cms, "each deposit's own note, in flush order")
-            .toEqual(item.depositIds.map((id) => cmToHex(submitted.find((s) => s.depositId === id)!.cm)));
+        expect(item.inners, "each deposit's own note, in flush order")
+            .toEqual(item.depositIds.map((id) => submitted.find((s) => s.depositId === id)!.inner.toLowerCase()));
 
         // Each deposit contributes two leaves, inserted as the flush's own
         // single run: its `RootAdvanced`, not every root the transaction moved.

@@ -7,7 +7,6 @@ import { Jubjub, Poseidon } from "@lelantos-org/sdk/primitives";
 import {
     buildDeposit,
     computePiHash,
-    type OutputRecipient,
     signPermit2Witness,
 } from "@lelantos-org/sdk/protocol";
 import { FmdClient, RelayerClient } from "@lelantos-org/sdk/services";
@@ -18,22 +17,13 @@ import { ASSET, plainAssetOf, scaleFor } from "./protocol/assets.js";
 import { type BundleItem, bundleItems, parseContractLogs } from "./protocol/logs.js";
 import { TREE_DEPTH } from "./protocol/shape.js";
 import { PROVER_PATHS } from "./testkit/prover.js";
-import { type DepositFeeArg, type FeeRng, noteRandomness } from "./testkit/deposit-fee.js";
+import { type DepositFeeArg, feeLeaf, type NonceRng, rhoNonce } from "./testkit/deposit-fee.js";
 import { TIMEOUT } from "./testkit/timeouts.js";
 import { env } from "./env.js";
-import { type Erc20Helpers, setupErc20, setupWeth } from "./scenario.js";
+import { type CircuitWallet, type Erc20Helpers, setupErc20, setupWeth } from "./scenario.js";
 import { payerEthSigner } from "./signers.js";
 import { mineIfAnvil, rpcProvider, SerialWallet, settleNonce } from "./tx.js";
-import { counter, pollUntil } from "./utils.js";
-
-/**
- * The randomness source for a note's FMD clue and ECDH ephemeral.
- *
- * No default seed: two files drawing from one would publish identical clues
- * and ephemerals on the shared anvil. Keep it far from the file's note-rng
- * seed too, since `counter` seeds a few apart share most of their draws.
- */
-export const newAuxRng = (seed: bigint) => counter(seed);
+import { cmToHex, pollUntil } from "./utils.js";
 
 export interface Harness {
     P: Poseidon;
@@ -161,7 +151,10 @@ interface SubmitDepositResult {
 }
 
 /** A deposit built by `buildDeposit` and not yet submitted. */
-export type BuiltDeposit = ReturnType<typeof buildDeposit>;
+export type BuiltDeposit = ReturnType<typeof buildDeposit> & {
+    /** The fee note's leaf, 0x-hex. The request carries only its `inner`. */
+    feeCm: string;
+};
 
 /**
  * Fresh Permit2 nonce, unique per call.
@@ -179,12 +172,13 @@ function nextPermit2Nonce(): bigint {
 }
 
 /**
- * Build a deposit for the direct path, bypassing the SDK wallet.
+ * Build a deposit into `wallet`'s own address, bypassing the SDK wallet.
  *
- * The depositor's note draws its randomness from the same counters as the fee
- * note, in the order `buildDeposit` consumes them, so reruns reproduce. Build
- * every deposit of a burst first and submit afterwards: the draws must stay
- * sequential even when the submits do not.
+ * Both notes are sealed under `wallet`'s outgoing key; the only per-deposit
+ * randomness is one `rho` nonce per leaf. The depositor's is drawn before the
+ * fee note's, from the same counter, so reruns reproduce. Build every deposit
+ * of a burst first and submit afterwards: the draws must stay sequential even
+ * when the submits do not.
  */
 export function buildDirectDeposit(
     h: Harness,
@@ -192,19 +186,21 @@ export function buildDirectDeposit(
         /** Circuit units. */
         amount: bigint;
         asset?: bigint;
-        recipient: OutputRecipient;
-        rngs: FeeRng;
+        wallet: CircuitWallet;
+        rng: NonceRng;
         /** From `relayerFeeNote` (flushes) or `unflushableFee` (stays escrowed). */
-        fee: (rngs: FeeRng) => DepositFeeArg;
+        fee: (rng: NonceRng) => DepositFeeArg;
     },
 ): BuiltDeposit {
-    return buildDeposit({
+    const built = buildDeposit({
         ...h.bundleCommon(args.asset ?? ASSET),
         publicIn: args.amount,
-        recipient: args.recipient,
-        output0: noteRandomness(args.rngs),
-        fee: args.fee(args.rngs),
+        recipient: args.wallet.recipient,
+        outgoingKey: args.wallet.outgoingKey,
+        rhoNonce: rhoNonce(args.rng),
+        fee: args.fee(args.rng),
     });
+    return { ...built, feeCm: cmToHex(feeLeaf(h.P, built.deposit)) };
 }
 
 /**
@@ -266,24 +262,14 @@ export async function submitDepositDirect(
             deposit.publicIn,
             deposit.payer,
             deposit.recipient,
-            deposit.outCm,
-            deposit.cvDep,
-            deposit.rcv,
+            deposit.inner,
             deposit.feeAssetId,
             deposit.feeIn,
-            deposit.feeCm,
-            deposit.feeCvDep,
-            deposit.feeRcv,
+            deposit.feeInner,
         ],
         [sig.nonce, sig.deadline, sig.maxTotal, sig.maxFee, sig.signature],
-        [aux.clueRx, aux.clueRy, aux.ephPubX, aux.ephPubY, ethers.hexlify(aux.ciphertext)],
-        [
-            feeAux.clueRx,
-            feeAux.clueRy,
-            feeAux.ephPubX,
-            feeAux.ephPubY,
-            ethers.hexlify(feeAux.ciphertext),
-        ],
+        auxArgs(aux),
+        auxArgs(feeAux),
     );
     const receipt = await tx.wait();
     const escrowed = parseContractLogs(receipt, masp, "DepositEscrowed");
@@ -291,6 +277,11 @@ export async function submitDepositDirect(
         throw new Error(`deposit ${tx.hash}: expected one DepositEscrowed log, got ${escrowed.length}`);
     }
     return { txHash: tx.hash, depositId: escrowed[0].args[0] as bigint };
+}
+
+/** `AuxValidation.Output`, in declaration order. */
+function auxArgs(a: BuiltDeposit["aux"]): unknown[] {
+    return [a.clueRx, a.clueRy, a.clueQx, a.clueQy, a.ephPubX, a.ephPubY, ethers.hexlify(a.ciphertext)];
 }
 
 /**
@@ -414,7 +405,7 @@ export {
 export {
     cancelDepositAfterDelay, EscrowJanitor, escrowOf, isEscrowed,
 } from "./testkit/cancel-deposit.js";
-export { quoteDepositFee, relayerFeeNote, unflushableFee } from "./testkit/deposit-fee.js";
+export { feeLeaf, quoteDepositFee, relayerFeeNote, unflushableFee } from "./testkit/deposit-fee.js";
 export {
     expectRelayerPaid,
     expectRelayerPaidOnCommitment,
